@@ -236,6 +236,9 @@ its Settings; nothing else changes.
 
 ## Architecture
 
+A plain-language walkthrough of how it all fits together is in
+[ARCHITECTURE.md](ARCHITECTURE.md). In short:
+
 Three OS processes share two SQLite databases:
 
 - **api** (FastAPI): REST + Server-Sent Events + the React dashboard.
