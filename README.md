@@ -32,6 +32,11 @@ M1 (sandboxed execution + stop controls). Specs, plan and acceptance criteria li
    Each task's work is committed, checked against its allowed files and a
    diff-size limit, validated in the sandbox together with the project test
    command, and merged into the milestone branch.
+   - **Toolchain.** Containers start from `foreman/executor-base` (Ubuntu,
+     git, OpenCode, no language runtimes). A project's `.foreman/Dockerfile`
+     (`FROM foreman/executor-base`, written by the planner with the spec) is
+     built into a per-project image before the first task and rebuilt only
+     when it changes; agents, validation and acceptance checks run in it.
    - **Watchdog.** Executors reach their model only through Foreman's *model
      gateway*, which counts calls and tokens against per-attempt budgets,
      stops an agent that keeps returning the same response, and adds the
@@ -155,7 +160,7 @@ start talking to the planner.
 | `FOREMAN_EXECUTOR_IMAGE` | `foreman/executor-base:latest` | Image for executor containers |
 | `FOREMAN_CONTAINER_CPUS` / `_MEMORY` | `2` / `4g` | Per-container limits |
 | `FOREMAN_STOP_GRACE_S` | `5` | SIGTERM → SIGKILL grace on Stop |
-| `FOREMAN_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config` |
+| `FOREMAN_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config`. A token saved under **Settings** in the dashboard takes precedence |
 | `FOREMAN_NTFY_URL` | *(empty)* | Push notifications for the inbox, e.g. `https://ntfy.sh/my-secret-topic` |
 | `FOREMAN_PUBLIC_URL` | *(empty)* | Dashboard URL for links in notifications |
 | `FOREMAN_GATEWAY_HOST` / `_PORT` | `0.0.0.0` / `8701` | Model gateway. Containers must reach it; every URL carries a per-run secret, but you can bind it to the Docker bridge (e.g. `172.17.0.1`) to keep it off the LAN |

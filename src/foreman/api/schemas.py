@@ -80,6 +80,21 @@ class NodeCreate(BaseModel):
     models: list[str] = Field(default_factory=list)
 
 
+class NodeUpdate(BaseModel):
+    capacity: int | None = Field(default=None, ge=1, le=64)
+
+
+class GitHubRepoCreate(BaseModel):
+    owner: str = Field(min_length=1, pattern=r"^[A-Za-z0-9-]+$")
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    private: bool = True
+    description: str = ""
+
+
+class GitHubTokenUpdate(BaseModel):
+    token: str = Field(min_length=1)
+
+
 class ControlRequest(BaseModel):
     scope: Literal["global", "project", "task"]
     target_id: int | None = None

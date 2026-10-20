@@ -40,6 +40,7 @@ class StepSpec:
     command: list[str]  # may reference $FOREMAN_WORKSPACE / $FOREMAN_CTL
     env: dict[str, str] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)
+    image: str = ""  # the project's toolchain image; "" = FOREMAN_EXECUTOR_IMAGE
 
 
 class Proc:
@@ -142,7 +143,7 @@ class DockerRuntime:
             args += ["--label", f"{k}={v}"]
         for k, v in env.items():
             args += ["-e", f"{k}={v}"]
-        return [*args, s.executor_image, *spec.command]
+        return [*args, spec.image or s.executor_image, *spec.command]
 
     async def start(self, spec: StepSpec) -> Proc:
         proc = await asyncio.create_subprocess_exec(

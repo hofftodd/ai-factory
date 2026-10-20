@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { post } from "../api";
 import { ErrorNote, Field } from "../components";
 import { usePoll } from "../hooks";
-import type { Node, Project, SystemInfo } from "../types";
+import type { GitHubTokenStatus, Node, Project, SystemInfo } from "../types";
 
 const PHASE_LABEL: Record<Project["phase"], string> = {
   specify: "specifying",
@@ -28,6 +28,19 @@ function Counts({ p }: { p: Project }) {
   );
 }
 
+// GitHub's rules for repository names, applied to a project name as the default.
+const repoSlug = (name: string) =>
+  name
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+interface CreatedRepo {
+  full_name: string;
+  clone_url: string;
+  html_url: string;
+}
+
 function AddProject({ onDone }: { onDone: (p: Project) => void }) {
   const { data: nodes } = usePoll<Node[]>("/api/nodes", 10000);
   const { data: sys } = usePoll<SystemInfo>("/api/system", 10000);
@@ -43,9 +56,21 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
     planner_model: "",
     push_after_merge: false,
     skip_spec: false,
+    repo_mode: "existing" as "existing" | "new",
+    new_owner: "",
+    new_name: "",
+    new_private: true,
   });
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
+  const creating = form.repo_mode === "new";
+  const { data: gh } = usePoll<GitHubTokenStatus>("/api/settings/github", 30000);
+  const { data: owners, error: ownersError } = usePoll<string[]>(
+    creating && gh?.configured ? "/api/github/owners" : null,
+    60000,
+  );
+  const owner = form.new_owner || owners?.[0] || "";
+  const repoName = form.new_name || repoSlug(form.name);
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const node = nodes?.find((n) => String(n.id) === form.node_id);
   const plannerNode = nodes?.find((n) => String(n.id) === form.planner_node_id);
@@ -55,12 +80,24 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
       className="card form"
       onSubmit={async (e) => {
         e.preventDefault();
-        setBusy(true);
         setError("");
         try {
+          let repoUrl = form.repo_url;
+          if (creating) {
+            setBusy("Creating repository…");
+            const repo = await post<CreatedRepo>("/api/github/repos", {
+              owner,
+              name: repoName,
+              private: form.new_private,
+            });
+            repoUrl = repo.clone_url;
+            // The repository exists now: a retry after a failure below must not create it again.
+            setForm((f) => ({ ...f, repo_mode: "existing", repo_url: repo.clone_url }));
+          }
+          setBusy("Cloning…");
           const p = await post<Project>("/api/projects", {
             name: form.name,
-            repo_url: form.repo_url,
+            repo_url: repoUrl,
             milestone_branch: form.milestone_branch,
             test_cmd: form.test_cmd,
             executor_kind: form.executor_kind,
@@ -77,7 +114,7 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
         } catch (err) {
           setError((err as Error).message);
         } finally {
-          setBusy(false);
+          setBusy("");
         }
       }}
     >
@@ -86,9 +123,46 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
         <Field label="Name">
           <input required value={form.name} onChange={(e) => set("name", e.target.value)} />
         </Field>
-        <Field label="GitHub repository" hint="https://github.com/owner/repo.git (or any git URL)">
-          <input required value={form.repo_url} onChange={(e) => set("repo_url", e.target.value)} />
+        <Field label="Repository">
+          <select value={form.repo_mode} onChange={(e) => set("repo_mode", e.target.value)}>
+            <option value="existing">Use an existing repository</option>
+            <option value="new">Create a new GitHub repository</option>
+          </select>
         </Field>
+        {creating ? (
+          gh && !gh.configured ? (
+            <div className="field">
+              <ErrorNote error="Creating a repository needs a GitHub token." />
+              <Link to="/settings">Add one in Settings</Link>
+            </div>
+          ) : (
+            <>
+              <Field label="Owner" hint="Your account or an organisation the token can create repositories in">
+                <select value={owner} onChange={(e) => set("new_owner", e.target.value)}>
+                  {owners?.map((o) => (
+                    <option key={o}>{o}</option>
+                  ))}
+                </select>
+                <ErrorNote error={ownersError} />
+              </Field>
+              <Field label="Repository name" hint="Created with a README on main">
+                <input
+                  required
+                  pattern="[A-Za-z0-9._\-]+"
+                  value={repoName}
+                  onChange={(e) => set("new_name", e.target.value)}
+                />
+              </Field>
+              <Field label="Private repository">
+                <input type="checkbox" checked={form.new_private} onChange={(e) => set("new_private", e.target.checked)} />
+              </Field>
+            </>
+          )
+        ) : (
+          <Field label="GitHub repository" hint="https://github.com/owner/repo.git (or any git URL)">
+            <input required value={form.repo_url} onChange={(e) => set("repo_url", e.target.value)} />
+          </Field>
+        )}
         <Field label="Milestone branch" hint="Finished tasks merge here">
           <input value={form.milestone_branch} onChange={(e) => set("milestone_branch", e.target.value)} />
         </Field>
@@ -142,8 +216,8 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
         </Field>
       </div>
       <ErrorNote error={error} />
-      <button className="btn primary" disabled={busy}>
-        {busy ? "Cloning…" : "Add project"}
+      <button className="btn primary" disabled={!!busy || (creating && (!gh?.configured || !owner))}>
+        {busy || (creating ? "Create repository and add project" : "Add project")}
       </button>
     </form>
   );

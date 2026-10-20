@@ -67,6 +67,10 @@ class FakeLLM:
         self.headers: list[dict[str, str]] = []
         self.planner = planner
         self.chunk_delay = chunk_delay
+        # Streamed as `reasoning_content` before the reply, like llama.cpp does for a
+        # thinking model; `finish` overrides the finish reason (e.g. "length").
+        self.reasoning = ""
+        self.finish: str | None = None
         self.disconnected = threading.Event()
         outer = self
 
@@ -160,6 +164,11 @@ class FakeLLM:
 
                 if not chunk({"role": "assistant", "content": ""}):
                     return
+                for i in range(0, len(outer.reasoning), CHUNK):
+                    if not chunk({"reasoning_content": outer.reasoning[i : i + CHUNK]}):
+                        return
+                if outer.finish:
+                    finish = outer.finish
                 if message.get("tool_calls"):
                     for i, tc in enumerate(message["tool_calls"]):
                         chunk({"tool_calls": [{"index": i, **tc}]})

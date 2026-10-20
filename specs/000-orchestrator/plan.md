@@ -192,9 +192,12 @@ Design changes made while building M1 (spec updated where relevant):
 - The node's API key (if any) is written into the OpenCode config inside the
   run's read-only control mount; cloud keys must go through a host-side proxy
   before cloud executors are allowed (NFR-5).
-- Per-project toolchain images (`.foreman/Dockerfile`) are not built yet; the
-  base image only has git + OpenCode, so validation commands that need a
-  language runtime require a custom `FOREMAN_EXECUTOR_IMAGE` for now.
+- Per-project toolchain images: before a task attempt or acceptance check, the
+  orchestrator builds `.foreman/Dockerfile` (context: `.foreman/` only) into
+  `foreman/project-<instance>-<id>:<hash of Dockerfile + base image id>` and runs
+  that step's containers from it; unchanged Dockerfiles reuse the image. A failed
+  build is a `config` failure (blocks at once). Builds are killable by Stop like
+  containers (`local:<pgid>` handle). Old images are not pruned yet.
 - No GitHub PR creation yet (milestone branch is merged locally and optionally
   pushed).
 
@@ -250,8 +253,6 @@ Design changes made while building M1 (spec updated where relevant):
 ### Known gaps carried into M3+
 
 - Network egress restriction for executor containers (FR-4.6) — still open.
-- Per-project toolchain images: the planner can write `.foreman/Dockerfile`,
-  but foreman doesn't build or use it yet.
 - Planner jobs don't count against node capacity.
 - Token counts are estimates (chars/4), not tokenizer-exact.
 - Watchdog, replanning after each task, and the remaining checkpoints are M3.
@@ -316,8 +317,6 @@ Design changes made while building M1 (spec updated where relevant):
 
 - Container network egress restriction (FR-4.6): executors now only *need*
   the gateway, so the next step is a Docker network that allows nothing else.
-- Per-project toolchain images (`.foreman/Dockerfile`) are written by the
-  planner but not yet built or used.
 - Planner jobs don't count against node capacity; the gateway enforces
   budgets but not node-level concurrency.
 - Token counts fall back to estimates when a server doesn't report usage.

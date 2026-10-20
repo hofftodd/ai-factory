@@ -16,6 +16,7 @@ from sqlmodel import col, select
 
 from foreman.config import get_settings
 from foreman.core.models import (
+    AppSetting,
     Control,
     ControlAction,
     ControlScope,
@@ -148,6 +149,42 @@ def set_flag(key: str, value: str) -> None:
         flag.updated_at = now()
         s.add(flag)
         s.commit()
+
+
+def get_app_setting(key: str) -> str:
+    with session() as s:
+        row = s.get(AppSetting, key)
+        return row.value if row else ""
+
+
+def set_app_setting(key: str, value: str) -> None:
+    """Store a dashboard setting; an empty value removes it."""
+    with session() as s:
+        row = s.get(AppSetting, key)
+        if not value:
+            if row is not None:
+                s.delete(row)
+                s.commit()
+            return
+        if row is None:
+            row = AppSetting(key=key)
+        row.value = value
+        row.updated_at = now()
+        s.add(row)
+        s.commit()
+
+
+GITHUB_TOKEN_KEY = "github_token"
+
+
+def github_token() -> tuple[str, str]:
+    """The GitHub token and where it came from: one saved in the dashboard wins over
+    FOREMAN_GITHUB_TOKEN. Used only by the orchestrator; never passed to executors."""
+    saved = get_app_setting(GITHUB_TOKEN_KEY)
+    if saved:
+        return saved, "dashboard"
+    env = get_settings().github_token
+    return env, "environment" if env else ""
 
 
 def estop_active() -> bool:
