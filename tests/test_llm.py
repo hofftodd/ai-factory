@@ -99,6 +99,11 @@ async def test_list_models(llm, provider):
     from foreman.llm import list_models
 
     base = llm.url if provider == "openai" else llm.url.removesuffix("/v1")
-    assert await list_models(Node(name="n", provider=provider, base_url=base, api_key="k")) == [
-        "fake-coder"
-    ]
+    expected = (
+        ["fake-coder"]
+        if provider == "openai"
+        else ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+    )
+    assert await list_models(Node(name="n", provider=provider, base_url=base, api_key="k")) == (
+        expected
+    )
