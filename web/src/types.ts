@@ -47,6 +47,9 @@ export interface Project {
   network: "gateway" | "open";
   spend_usd: number;
   spend_cap_usd: number;
+  min_task_coverage: number;
+  test_paths: string[];
+  coverage?: number | null;
   created_at: number;
   task_counts?: Partial<Record<TaskState, number>>;
   pending_gates?: number;
@@ -67,6 +70,7 @@ export interface TaskRun {
   failure_kind: string;
   diff_lines: number;
   exit_code: number | null;
+  step: "" | "tester" | "builder";
   reason: string;
   started_at: number;
   ended_at: number | null;
@@ -82,6 +86,10 @@ export interface Task {
   validation_cmd: string;
   deps: number[];
   key: string;
+  kind: "setup" | "acceptance" | "feature" | "docs";
+  criteria: string[];
+  tests_ready: boolean;
+  coverage_rounds: number;
   req_refs: string[];
   context_files: string[];
   size_violations: string[];
@@ -138,6 +146,8 @@ export interface FEvent {
     | "gate"
     | "planner"
     | "planner_thinking"
+    | "research"
+    | "denied"
     | "planner_start"
     | "planner_end"
     | "watchdog"
@@ -186,7 +196,7 @@ export interface PlannerJob {
   ended_at: number | null;
 }
 
-export type DocName = "spec" | "plan" | "validation" | "tasks";
+export type DocName = "requirements" | "design" | "acceptance" | "tasks";
 
 export interface SpecState {
   phase: ProjectPhase;
@@ -213,7 +223,60 @@ export interface WatchdogLimits {
   max_acceptance_failures: number;
 }
 
-export type GateKind = "plan_revision" | "spec_change" | "task_merge" | "escalation" | "milestone" | "budget";
+export type GateKind =
+  | "plan_revision"
+  | "spec_change"
+  | "task_merge"
+  | "escalation"
+  | "milestone"
+  | "budget"
+  | "coverage";
+
+export interface TestCase {
+  id: number;
+  name: string;
+  classname: string;
+  file: string;
+  status: "passed" | "failed" | "error" | "skipped";
+  duration_s: number;
+  message: string;
+  task_test: boolean;
+}
+
+export interface TestRun {
+  id: number;
+  task_id: number | null;
+  step: "tester" | "builder" | "acceptance";
+  commit: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+  duration_s: number;
+  coverage: number | null;
+  changed_coverage: number | null;
+  changed_lines: number;
+  files: Record<string, { covered: number; total: number }>;
+  problem: string;
+  created_at: number;
+  cases?: TestCase[];
+}
+
+export interface CoveragePoint {
+  ts: number;
+  coverage: number | null;
+  tests: number;
+  passed: number;
+  task_id: number | null;
+}
+
+export interface RoleInfo {
+  key: string;
+  name: string;
+  summary: string;
+  may: string[];
+  may_not: string[];
+}
 
 export interface Gate {
   id: number;

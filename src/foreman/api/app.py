@@ -72,6 +72,7 @@ from foreman.core.state import (
 )
 from foreman.db import control_session, session
 from foreman.executors import EXECUTORS
+from foreman.executors.shell import role_scripts
 from foreman.llm import list_models
 
 
@@ -271,12 +272,16 @@ def list_projects() -> list[dict[str, Any]]:
             t.project_id: t.title
             for t in s.exec(select(Task).where(col(Task.state).in_(ACTIVE_STATES)))
         }
+        coverage: dict[int, float | None] = {}
+        for r in s.exec(select(TestRun).where(TestRun.step == "builder").order_by(col(TestRun.id))):
+            coverage[r.project_id] = r.coverage  # the latest verified run wins
     return [
         {
             **p.model_dump(),
             "task_counts": _task_counts(p.id),
             "pending_gates": waiting.get(p.id or 0, 0),
             "active_task": active.get(p.id or 0, ""),
+            "coverage": coverage.get(p.id or 0),
         }
         for p in projects
     ]
@@ -436,7 +441,8 @@ def create_task(project_id: int, body: TaskCreate) -> Task:
     if body.executor_kind and body.executor_kind not in EXECUTORS:
         raise HTTPException(400, f"unknown executor {body.executor_kind}")
     if (body.executor_kind or p.executor_kind) == "shell":
-        if not body.validation_cmd.strip():
+        # Scripted Tester/Builder steps are tested like agent tasks; plain scripts need a command.
+        if not body.validation_cmd.strip() and not role_scripts(body.executor_script):
             raise HTTPException(400, "scripted (shell) tasks need a validation command")
     else:
         # Agent tasks: the Tester decides how to test them, from the criteria.

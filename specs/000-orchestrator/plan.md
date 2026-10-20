@@ -412,3 +412,85 @@ Design changes made while building M1 (spec updated where relevant):
 - Projects still run one task at a time each; parallelism comes from running
   several projects across nodes.
 - GitHub Issues integration remains a future enhancement (spec §9).
+
+## 12. Strict agent roles (post-M4)
+
+The single planner and single coding agent are replaced by four agents with
+fixed capabilities, managed by the (model-free) orchestrator. The design came
+from a diagram by the project owner; the mermaid version is in
+[`ARCHITECTURE.md`](../../ARCHITECTURE.md#the-four-agents).
+
+- **Role registry** (`core/roles.py`): `ROLES` names each agent, what it may
+  and may not do, and its model binding (`project_planner`, `task_planner`,
+  `tester`, `builder`; `escalation` stays a stronger-model tier for Tester and
+  Builder steps). Older projects' `planner` binding serves both planners and
+  `executor` serves Tester and Builder (`roles.binding`). Refusals are
+  `denied` events. `GET /api/roles` feeds the dashboard's read-only panel.
+- **Planning documents**: `specs/<feature>/requirements.md`, `design.md`,
+  `acceptance-criteria.md` (human-readable markdown, no code or paths) and the
+  generated `tasks.md`. Projects with the old `spec.md` / `plan.md` /
+  `validation.md` keep reading them (`roles.doc_file`). Approval needs the
+  three documents, no acceptance command.
+- **Project Planner**: writes only the three documents (anything else in its
+  reply is refused). It may research: on Claude via the server-side
+  `web_search` / `web_fetch` tools (`pause_turn` resumed up to 5 times); on
+  OpenAI-compatible models via `web_search` / `web_fetch` function tools that
+  Foreman runs (`research.py`: SearXNG at `FOREMAN_SEARCH_URL`; fetch refuses
+  private, loopback and link-local addresses and doesn't follow redirects).
+  Without a search service local models get no tools.
+- **Task Planner**: plain-language tasks `{key, title, goal, req_refs,
+  criteria (≤ 6), deps, size}`; file and command fields are refused
+  (`parse_task_items`, `replan.validate_ops`). `standard_tasks()` frames every
+  plan with SETUP (first), ACCEPT (acceptance tests) and DOCS (last:
+  `README.md` and `ARCHITECTURE.md`). Approved spec changes queue a Project
+  Planner chat job instead of editing documents directly.
+- **Tester → Builder pipeline** (`orchestrator/runner.py`): each task runs a
+  Tester step and a Builder step, each its own `TaskRun` (`step`) with its own
+  binding, budget and context pack (`contextpack.build_role_pack`).
+  - Mounts (`sandbox.StepSpec`): Tester gets a read-only workspace with
+    writable test paths; Builder gets read-only test paths. Both get
+    `$FOREMAN_RESULTS` (`/foreman-results`).
+  - Fences: after each step the diff is checked with `roles.fence` (test
+    paths plus test-file name patterns such as `*_test.go`, `*.spec.ts`); a
+    violation resets the step's changes and fails it (`failure_kind="fence"`).
+  - The Tester must add tests and the suite runner `tests/run.sh` (and, for
+    ACCEPT, `tests/acceptance/run.sh`); its run is recorded "red". The Builder
+    must leave the whole suite green.
+  - A retry after a Builder failure keeps the Tester's commit
+    (`tests_ready`, `tests_commit`); "send back to Tester" on an escalation
+    gate clears it.
+- **Test results** (`testresults.py`, `TestRun` / `TestCase`): JUnit XML plus
+  Cobertura or LCOV from `$FOREMAN_RESULTS`. A task's own tests are the cases
+  in files its Tester changed. Changed-line coverage = instrumented lines added
+  since the task's base that the tests hit. Below `Project.min_task_coverage`
+  (default 80; 0 = report only) the task goes back to the Tester once, then a
+  COVERAGE gate asks (approve merges; reject sends back).
+  - API: `GET /api/tasks/{id}/tests`, `/api/projects/{id}/tests`,
+    `/api/projects/{id}/coverage-trend`.
+  - Dashboard: the task Tests tab, the project Tests section with a coverage
+    line chart (one 0–100% axis, tooltip, table view) and coverage on project
+    cards.
+- **Acceptance**: the definition of done defaults to `sh
+  tests/acceptance/run.sh`; its results are stored as an `acceptance` TestRun.
+- **Manual tasks**: agent tasks take a goal and criteria only. Scripted
+  (`shell`) tasks keep a validation command, or use `{"tester": ..., "builder":
+  ...}` role scripts to go through the same pipeline (used by the tests,
+  e2e and screenshots).
+
+### Validation coverage for the roles
+
+| Check | Status |
+|---|---|
+| Planners can't write code, tests, commands or file-level tasks | ✅ `test_planner_may_not_write_code_tests_or_commands`, `test_planner_prompts_think_in_plain_language`, replan op validation in `tests/test_autonomy.py` |
+| Standard tasks always framed | ✅ `test_standard_tasks_frame_the_plan`, `tests/test_spec_flow.py` |
+| Tester first (red), Builder makes green, results stored and served | ✅ `test_tester_then_builder_red_to_green` |
+| Tester can't change code / Builder can't change tests (fence) | ✅ `test_tester_may_not_change_code`, `test_builder_may_not_change_tests` |
+| …nor inside their containers (mounts) | ✅ `test_tester_cannot_write_code_inside_its_container`, `test_builder_cannot_write_tests_inside_its_container` (`tests/test_docker.py`) |
+| Every task has tests | ✅ `test_every_task_needs_tests` |
+| Coverage send-back, gate, report-only | ✅ `test_low_coverage_goes_back_to_the_tester_then_asks`, `test_coverage_minimum_zero_only_reports` |
+| Send back to Tester | ✅ `test_blocked_task_can_go_back_to_the_tester` |
+| Result parsing and changed-line coverage | ✅ `tests/test_testresults.py` |
+| Old bindings map to the new roles | ✅ `test_role_bindings_fall_back_for_older_projects` |
+| Web research (local and Claude), private addresses refused | ✅ `tests/test_research.py` |
+| Real OpenCode, idea to done | ✅ `test_spec_to_done_with_opencode` (Docker) |
+| Browser flow | ✅ `web/e2e/spec.spec.ts` (documents → five tasks → done) |

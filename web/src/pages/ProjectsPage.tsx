@@ -79,6 +79,7 @@ function ProgressBar({ p }: { p: Project }) {
       </div>
       <div className="small muted">
         {done} of {total} tasks done
+        {p.coverage != null && ` · ${Math.round(p.coverage)}% test coverage`}
         {p.spend_usd > 0 && ` · $${p.spend_usd.toFixed(2)} spent`}
       </div>
     </div>
