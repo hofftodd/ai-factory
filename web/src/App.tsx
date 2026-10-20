@@ -7,6 +7,7 @@ import InboxPage from "./pages/InboxPage";
 import NodesPage from "./pages/NodesPage";
 import ProjectPage from "./pages/ProjectPage";
 import ProjectsPage from "./pages/ProjectsPage";
+import SettingsPage from "./pages/SettingsPage";
 import TaskPage from "./pages/TaskPage";
 import type { SystemInfo } from "./types";
 
@@ -66,6 +67,7 @@ export default function App() {
             {!!sys?.pending_gates && <span className="count">{sys.pending_gates}</span>}
           </NavLink>
           <NavLink to="/nodes">Nodes</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
         <div className="spacer" />
         {sys && <Health sys={sys} />}
@@ -99,6 +101,7 @@ export default function App() {
             <Route path="/tasks/:id" element={<TaskPage />} />
             <Route path="/nodes" element={<NodesPage />} />
             <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<p>Not found.</p>} />
           </Routes>
         )}

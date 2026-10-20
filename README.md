@@ -42,12 +42,15 @@ tasks. More in [Screenshots](#screenshots).*
    coding agent. Each task's work is committed, checked against its allowed
    files and a diff-size limit, validated in the sandbox together with the
    project test command, and merged into the milestone branch.
+   - **Toolchain.** Containers start from `foreman/executor-base` (Ubuntu,
+     git, OpenCode, no language runtimes). A project's `.foreman/Dockerfile`
+     (`FROM foreman/executor-base`) is built into a per-project image before
+     the first task and rebuilt only when it changes; agents, validation and
+     acceptance checks run in it. Builds can be stopped like any task.
    - **Sandbox.** Containers run as an unprivileged user on an internal
      Docker network whose only reachable endpoint is Foreman's model gateway:
      no internet, no LAN, no host (switch a project to "open" network if its
-     tasks really need it). A project's `.foreman/Dockerfile` (written by the
-     planner or by you, `FROM foreman/executor-base`) adds its language
-     toolchain; Foreman builds it on demand and reuses it until it changes.
+     tasks really need it).
    - **Nodes.** Projects run side by side across your model servers. Each
      node has a capacity shared by task attempts and planner calls, and is
      health-checked every minute; work waits for a free slot on a healthy
@@ -228,7 +231,7 @@ its Settings; nothing else changes.
 | `FOREMAN_EXECUTOR_IMAGE` | `foreman/executor-base:latest` | Image for executor containers |
 | `FOREMAN_CONTAINER_CPUS` / `_MEMORY` | `2` / `4g` | Per-container limits |
 | `FOREMAN_STOP_GRACE_S` | `5` | SIGTERM → SIGKILL grace on Stop |
-| `FOREMAN_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config` |
+| `FOREMAN_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config`. A token saved under **Settings** in the dashboard takes precedence |
 | `FOREMAN_NTFY_URL` | *(empty)* | Push notifications for the inbox, e.g. `https://ntfy.sh/my-secret-topic` |
 | `FOREMAN_PUBLIC_URL` | *(empty)* | Dashboard URL for links in notifications |
 | `FOREMAN_GATEWAY_HOST` / `_PORT` | `0.0.0.0` / `8701` | Model gateway. Locked-down containers reach it through a relay container; every URL carries a per-run secret, but you can bind it to the Docker bridge (e.g. `172.17.0.1`) to keep it off the LAN |

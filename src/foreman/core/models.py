@@ -260,6 +260,14 @@ class SystemFlag(SQLModel, table=True):
     updated_at: float = Field(default_factory=now)
 
 
+class AppSetting(SQLModel, table=True):
+    """Global settings edited from the dashboard (e.g. the GitHub token). Lives in foreman.db."""
+
+    key: str = Field(primary_key=True)
+    value: str = ""
+    updated_at: float = Field(default_factory=now)
+
+
 class SpecMessage(SQLModel, table=True):
     """One turn of the Phase 1 conversation with the planner."""
 

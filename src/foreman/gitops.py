@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 from foreman.config import get_settings
+from foreman.core.state import github_token
 
 # Marks the commit a task clone started from.
 BASE_REF = "refs/foreman/base"
@@ -38,7 +39,7 @@ class GitError(RuntimeError):
 
 
 def _auth_args(url: str) -> list[str]:
-    token = get_settings().github_token
+    token, _ = github_token()
     if not token or not url.startswith("https://github.com/"):
         return []
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()

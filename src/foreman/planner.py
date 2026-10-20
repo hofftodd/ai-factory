@@ -13,7 +13,11 @@ Both are pure functions over text so they can be tested without a model:
       >>>
 
   Full-file blocks (not diffs) are deliberately simple so small local models
-  can follow them reliably.
+  can follow them reliably. The parser is lenient about the variations local
+  models produce: the path may be on the line after ``<<<FILE``, and a block
+  may end at the next ``<<<FILE``/``<<<ACCEPTANCE_CMD`` instead of ``>>>`` (a
+  bare ``<<<FILE`` followed by a blank line is then only a terminator). A
+  block still open when the reply ends is not applied: the reply was cut off.
 
 - *decomposition* asks for a JSON array of tasks, validates it (fields,
   dependency graph, size limits via context packs) and returns a list of
@@ -31,8 +35,9 @@ from foreman.core.models import Project
 
 DOC_NAMES = ("spec", "plan", "validation", "tasks")
 
-_FILE_BLOCK = re.compile(r"<<<FILE[ \t]+([^\n]+)\n(.*?)\n?>>>[ \t]*$", re.S | re.M)
-_CMD_BLOCK = re.compile(r"<<<ACCEPTANCE_CMD[ \t]*\n(.*?)\n?>>>[ \t]*$", re.S | re.M)
+_FILE_OPEN = re.compile(r"^<<<FILE(?:[ \t]+(.*?))?[ \t]*$")
+_CMD_OPEN = re.compile(r"^<<<ACCEPTANCE_CMD[ \t]*$")
+_CLOSE = ">>>"
 
 
 def doc_path(project: Project, name: str) -> str:
@@ -61,9 +66,12 @@ def parse_chat(project: Project, text: str) -> ChatOutput:
     from foreman.gitops import safe_rel_path
 
     out = ChatOutput(message="")
+    message: list[str] = []
+    # The open block: ("file", path) or ("cmd", ""), and its lines so far.
+    block: tuple[str, str] | None = None
+    body: list[str] = []
 
-    def take_file(m: re.Match[str]) -> str:
-        raw_path, content = m.group(1).strip(), m.group(2)
+    def take_file(raw_path: str, content: str) -> str:
         try:
             rel = safe_rel_path(raw_path)
         except ValueError:
@@ -75,33 +83,115 @@ def parse_chat(project: Project, text: str) -> ChatOutput:
         out.files[rel] = content
         return f"[wrote {rel}]"
 
-    def take_cmd(m: re.Match[str]) -> str:
-        out.acceptance_cmd = m.group(1).strip()
-        return f"[acceptance command: {out.acceptance_cmd}]"
+    def close() -> None:
+        nonlocal block
+        if block is None:
+            return
+        kind, path = block
+        if kind == "file":
+            message.append(take_file(path, "\n".join(body)))
+        else:
+            out.acceptance_cmd = "\n".join(body).strip()
+            message.append(f"[acceptance command: {out.acceptance_cmd}]")
+        block = None
+        body.clear()
 
-    message = _FILE_BLOCK.sub(take_file, text)
-    message = _CMD_BLOCK.sub(take_cmd, message)
-    out.message = message.strip()
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if m := _FILE_OPEN.match(line):
+            close()
+            path = (m.group(1) or "").strip()
+            nxt = lines[i].strip() if i < len(lines) else ""
+            if not path and nxt and not any(c.isspace() for c in nxt):
+                path = nxt  # path on the next line (prose there means a bare terminator)
+                i += 1
+            if path:
+                block = ("file", path)
+        elif _CMD_OPEN.match(line):
+            close()
+            block = ("cmd", "")
+        elif block is not None and line.strip() == _CLOSE:
+            close()
+        elif block is not None:
+            body.append(line)
+        else:
+            message.append(line)
+    if block is not None:
+        kind, path = block
+        message.append(
+            f"[incomplete file {path}: not written]" if kind == "file" else "[incomplete command]"
+        )
+    out.message = "\n".join(message).strip()
     return out
+
+
+# What `.foreman/Dockerfile` builds on (docker/executor-base/Dockerfile), so the
+# planner does not have to guess.
+BASE_IMAGE = (
+    "`foreman/executor-base` is Ubuntu 24.04 with git, curl, bash and the coding agent, and "
+    "no language runtimes (no Node, no Python): the Dockerfile must install what the project "
+    "needs. The base image ends with `USER agent`, so switch to `USER root` for apt-get and "
+    "back to `USER agent` at the end."
+)
+
+
+def chat_stage(docs: dict[str, str], tree: list[str]) -> str:
+    """Where the conversation is: "design" until spec, plan and validation exist,
+    "tests" until acceptance tests exist, then "review"."""
+    if not all(docs.get(n, "").strip() for n in ("spec", "plan", "validation")):
+        return "design"
+    if not any(f.startswith("tests/acceptance/") for f in tree):
+        return "tests"
+    return "review"
+
+
+_STAGE_GUIDANCE = {
+    "design": [
+        "Current step: DESIGN. Ask clarifying questions until the request is clear, then "
+        "write spec.md, plan.md and validation.md. Do not write acceptance tests, the "
+        "Dockerfile or the acceptance command yet: the user reviews the design first. End by "
+        "asking the user to review it.",
+    ],
+    "tests": [
+        "Current step: DESIGN REVIEW. The design documents exist. While the user gives "
+        "feedback, revise them. Once the user says the design is right (or asks you to "
+        "continue), write the acceptance tests, .foreman/Dockerfile and the acceptance command.",
+    ],
+    "review": [
+        "Current step: REVIEW. Documents and acceptance tests exist. Change them as the user "
+        "asks, keeping spec, validation and tests consistent with each other.",
+    ],
+}
 
 
 def chat_system_prompt(
     project: Project, docs: dict[str, str], tree: list[str], acceptance_cmd: str
 ) -> str:
     d = f"specs/{project.feature}"
+    stage = chat_stage(docs, tree)
     parts = [
-        "You are the planner for a software project. You work with the user to produce, "
-        "before any code is written:",
+        "You are the planner for a software project. You design it with the user; coding "
+        "agents implement it later, in small tasks. The deliverables, in order:",
         f"1. {d}/spec.md - requirements. Give every requirement a stable id on its own bullet, "
         "e.g. `- FR-1.1 Users can add a todo.` (functional) or `- NFR-1 ...` (non-functional).",
-        f"2. {d}/plan.md - architecture, components, file layout, milestones.",
+        f"2. {d}/plan.md - architecture, components, file layout, the interfaces between "
+        "components (names, signatures, data shapes), milestones.",
         f"3. {d}/validation.md - acceptance criteria, each citing the requirement ids it checks.",
         "4. Executable acceptance tests under tests/acceptance/ that fail until the software "
-        "is built, plus the command that runs them.",
+        "is built, plus the command that runs them, and .foreman/Dockerfile.",
         "",
-        "Ask clarifying questions when the request is ambiguous. Keep documents concise; "
-        "the work will be split into small tasks for coding agents with small context windows, "
-        "so prefer small files and clear interfaces.",
+        "You design; you do not implement. The documents describe behaviour and interfaces "
+        "and contain no implementation code. The only code you write is the acceptance tests "
+        "and the Dockerfile.",
+        "Keep documents concise: the work will be split into small tasks for coding agents "
+        "with small context windows, so prefer small files and clear interfaces.",
+        "Think about decisions, not text: do not draft file contents while reasoning. Write "
+        "each file once, in your reply.",
+        "",
+        *_STAGE_GUIDANCE[stage],
         "",
         "To create or replace a file, output a block with the COMPLETE new content:",
         "<<<FILE path/to/file",
@@ -111,6 +201,7 @@ def chat_system_prompt(
         "tests/acceptance/, and .foreman/Dockerfile (a Dockerfile `FROM foreman/executor-base` "
         "that installs the language toolchain and dependencies the project needs: coding agents "
         "run WITHOUT internet access, so anything they need must be installed in that image).",
+        BASE_IMAGE,
         "To set the command that runs the acceptance tests:",
         "<<<ACCEPTANCE_CMD",
         "the command",

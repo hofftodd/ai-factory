@@ -48,7 +48,7 @@ def docker_runtime(monkeypatch):
     remove_egress_lockdown()
     images = subprocess.run(
         ["docker", "images", "-q", "--filter",
-         f"reference=foreman/toolchain-{get_settings().instance_id}-*"],
+         f"reference=foreman/project-{get_settings().instance_id}-*"],
         capture_output=True, text=True,
     ).stdout.split()
     if images:
@@ -289,32 +289,81 @@ async def test_network_modes(client, origin, network):
         assert result["host"] == "200"
 
 
-TOOLCHAIN = """FROM foreman/executor-base:latest
-USER root
-RUN echo toolchain-ok > /opt/marker
-USER agent
-"""
+def _toolchain(nonce: str, extra: str = "") -> str:
+    # The nonce makes each test run build afresh instead of reusing an earlier image.
+    return (
+        "FROM foreman/executor-base\n"
+        f"# test {nonce}\n"
+        "USER root\n"
+        "RUN echo toolchain-ok > /opt/toolchain\n"
+        f"{extra}"
+        "USER agent\n"
+    )
 
 
-async def test_toolchain_image_built_once_and_used(client, origin):
+def _remove_project_images() -> None:
+    out = subprocess.run(
+        ["docker", "images", "-q", "--filter", "label=foreman=1", "foreman/project-*"],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    if out:
+        subprocess.run(["docker", "rmi", "-f", *out], capture_output=True)
+
+
+async def test_tasks_run_in_the_project_toolchain_image(client, origin, tmp_path):
     from sqlmodel import select
 
-    from foreman import gitops
-    from foreman.core.models import Event
+    from foreman.core.models import Event, TaskRun
     from foreman.db import session
+    from tests.test_images import add_to_origin
 
+    add_to_origin(origin, tmp_path, {".foreman/Dockerfile": _toolchain(str(time.time_ns()))})
     p = make_project(client, origin)
-    gitops.write_and_commit(p["id"], {".foreman/Dockerfile": TOOLCHAIN}, "toolchain")
-    a = make_task(client, p["id"], script="cat /opt/marker > a.txt")
-    b = make_task(client, p["id"], script="cat /opt/marker > b.txt", deps=[a["id"]])
-    await drive(Orchestrator(), lambda: task(b["id"]).state in TERMINAL, timeout=300)
-    assert task(b["id"]).state == TaskState.DONE, task(b["id"]).reason
-    repo = gitops.repo_dir(p["id"])
-    assert (repo / "a.txt").read_text() == (repo / "b.txt").read_text() == "toolchain-ok\n"
-    with session() as s:
-        builds = [e for e in s.exec(select(Event).where(Event.project_id == p["id"]))
-                  if e.kind == "build" and e.message.startswith("building toolchain image")]
-    assert len(builds) == 1  # the second task reused the image
+    try:
+        a = make_task(
+            client, p["id"], "cp /opt/toolchain out.txt", validation="grep -q ok /opt/toolchain"
+        )
+        b = make_task(client, p["id"], "echo b > b.txt", validation="test -f /opt/toolchain")
+        await drive(
+            Orchestrator(),
+            lambda: {task(a["id"]).state, task(b["id"]).state} <= TERMINAL,
+            timeout=300,
+        )
+        assert task(a["id"]).state == TaskState.DONE, task(a["id"]).reason
+        assert task(b["id"]).state == TaskState.DONE, task(b["id"]).reason
+        with session() as s:
+            builds = s.exec(
+                select(Event).where(Event.kind == "log", Event.message.contains("toolchain-ok"))
+            ).all()
+            runs = s.exec(select(TaskRun)).all()
+        # Built once (the second task reuses the image), and both runs used it.
+        assert {e.task_id for e in builds} == {a["id"]}
+        assert len(runs) == 2
+    finally:
+        _remove_project_images()
+
+
+async def test_broken_toolchain_fails_as_configuration(client, origin, tmp_path):
+    from sqlmodel import select
+
+    from foreman.core.models import TaskRun
+    from foreman.db import session
+    from tests.test_images import add_to_origin
+
+    broken = _toolchain(str(time.time_ns()), "RUN exit 7\n")
+    add_to_origin(origin, tmp_path, {".foreman/Dockerfile": broken})
+    p = make_project(client, origin)
+    try:
+        t = make_task(client, p["id"], "echo never > ran.txt")
+        await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=300)
+        assert task(t["id"]).state == TaskState.FAILED
+        assert "building .foreman/Dockerfile failed" in task(t["id"]).reason
+        with session() as s:
+            run = s.exec(select(TaskRun)).one()
+        assert run.failure_kind == "config"
+    finally:
+        _remove_project_images()
 
 
 async def test_toolchain_must_derive_from_base(client, origin):

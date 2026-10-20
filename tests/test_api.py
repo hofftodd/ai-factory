@@ -48,6 +48,15 @@ def test_nodes_hide_api_key(client):
     assert checked["healthy"] is False and checked["error"]
 
 
+def test_update_node_capacity(client):
+    n = client.post("/api/nodes", json={"name": "mac", "base_url": "http://mac:8080/v1"}).json()
+    r = client.patch(f"/api/nodes/{n['id']}", json={"capacity": 3})
+    assert r.status_code == 200 and r.json()["capacity"] == 3
+    assert client.get("/api/nodes").json()[0]["capacity"] == 3
+    assert client.patch(f"/api/nodes/{n['id']}", json={"capacity": 0}).status_code == 422
+    assert client.patch("/api/nodes/999", json={"capacity": 2}).status_code == 404
+
+
 def test_pause_resume(client, origin):
     p = make_project(client, origin)
     t = make_task(client, p["id"], "true")
@@ -97,3 +106,42 @@ def test_events_endpoint(client, origin):
     assert [e["kind"] for e in events][:2] == ["system", "state"]
     after = events[-1]["id"]
     assert client.get(f"/api/events?project_id={p['id']}&after={after}").json() == []
+
+
+def test_github_token_from_dashboard(client, monkeypatch):
+    monkeypatch.setenv("FOREMAN_GITHUB_TOKEN", "ghp_from_env_1111")
+    assert client.get("/api/settings/github").json() == {
+        "configured": True,
+        "source": "environment",
+        "hint": "1111",
+    }
+    r = client.put("/api/settings/github", json={"token": " ghp_from_ui_2222 "})
+    assert r.json() == {"configured": True, "source": "dashboard", "hint": "2222"}
+    assert "ghp_from_ui" not in r.text
+    assert "ghp_from_ui" not in client.get("/api/settings/github").text
+    from foreman.core.state import github_token
+
+    assert github_token() == ("ghp_from_ui_2222", "dashboard")  # what git and the PR call use
+    assert client.put("/api/settings/github", json={"token": ""}).status_code == 422
+    assert client.delete("/api/settings/github").json()["source"] == "environment"
+
+
+def test_github_token_check(client, monkeypatch):
+    from foreman import github
+
+    assert client.post("/api/settings/github/check").status_code == 400
+    seen = []
+
+    async def fake_user(token):
+        seen.append(token)
+        if token == "bad":
+            raise github.GitHubError("GitHub rejected the token (401)")
+        return {"login": "octocat", "scopes": "repo"}
+
+    monkeypatch.setattr(github, "user", fake_user)
+    client.put("/api/settings/github", json={"token": "good"})
+    r = client.post("/api/settings/github/check").json()
+    assert r["ok"] and r["login"] == "octocat"
+    client.put("/api/settings/github", json={"token": "bad"})
+    r = client.post("/api/settings/github/check").json()
+    assert not r["ok"] and "401" in r["error"] and seen == ["good", "bad"]

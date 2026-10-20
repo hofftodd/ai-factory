@@ -193,9 +193,12 @@ Design changes made while building M1 (spec updated where relevant):
 - The node's API key (if any) is written into the OpenCode config inside the
   run's read-only control mount; cloud keys must go through a host-side proxy
   before cloud executors are allowed (NFR-5).
-- Per-project toolchain images (`.foreman/Dockerfile`) are not built yet; the
-  base image only has git + OpenCode, so validation commands that need a
-  language runtime require a custom `FOREMAN_EXECUTOR_IMAGE` for now.
+- Per-project toolchain images: before a task attempt or acceptance check, the
+  orchestrator builds `.foreman/Dockerfile` (context: `.foreman/` only) into
+  `foreman/project-<instance>-<id>:<hash of Dockerfile + base image id>` and runs
+  that step's containers from it; unchanged Dockerfiles reuse the image. A failed
+  build is a `config` failure (blocks at once). Builds are killable by Stop like
+  containers (`local:<pgid>` handle). Old images are not pruned yet.
 - No GitHub PR creation yet (milestone branch is merged locally and optionally
   pushed).
 
@@ -251,8 +254,6 @@ Design changes made while building M1 (spec updated where relevant):
 ### Known gaps carried into M3+
 
 - Network egress restriction for executor containers (FR-4.6) — still open.
-- Per-project toolchain images: the planner can write `.foreman/Dockerfile`,
-  but foreman doesn't build or use it yet.
 - Planner jobs don't count against node capacity.
 - Token counts are estimates (chars/4), not tokenizer-exact.
 - Watchdog, replanning after each task, and the remaining checkpoints are M3.
@@ -317,8 +318,6 @@ Design changes made while building M1 (spec updated where relevant):
 
 - Container network egress restriction (FR-4.6): executors now only *need*
   the gateway, so the next step is a Docker network that allows nothing else.
-- Per-project toolchain images (`.foreman/Dockerfile`) are written by the
-  planner but not yet built or used.
 - Planner jobs don't count against node capacity; the gateway enforces
   budgets but not node-level concurrency.
 - Token counts fall back to estimates when a server doesn't report usage.
@@ -336,12 +335,14 @@ Design changes made while building M1 (spec updated where relevant):
   gateway is then reached at `host.docker.internal`). If the lockdown can't
   be set up, gateway-mode tasks fail with a configuration error rather than
   running unconfined.
-- **Toolchain images** (`toolchain.py`): `.foreman/Dockerfile` must build
-  `FROM foreman/executor-base` (checked, so agents stay unprivileged). The
-  image is tagged by a hash of the Dockerfile, the base image name and every
-  file it COPYs/ADDs, built before the first step that needs it (builds have
-  network; tasks don't), and used for task steps and acceptance checks. A bad
-  Dockerfile or failed build blocks the task as a configuration problem.
+- **Toolchain images** (`images.py`, merged from the `local-node-and-toolchains`
+  branch): `.foreman/Dockerfile` must build `FROM foreman/executor-base`
+  (checked, so agents stay unprivileged). Only `.foreman/` is the build context.
+  The image is tagged by a hash of the Dockerfile, the files it COPYs/ADDs and
+  the base image id, built before each attempt and acceptance check if missing
+  (builds have network; tasks don't; Stop kills a build), and used for every
+  container of that step. A bad Dockerfile or failed build is a configuration
+  failure.
 - **Multi-node scheduling** (`orchestrator/main.py`): node load = running
   task attempts + running planner jobs; both count against `Node.capacity`.
   Nodes are health-checked every `FOREMAN_NODE_CHECK_S` (model list fetch,
@@ -398,7 +399,7 @@ Design changes made while building M1 (spec updated where relevant):
 | Node health | ✅ `test_health_checks_mark_nodes_and_announce_changes`, `test_unhealthy_node_gets_no_tasks` |
 | V9.1 restart leaves nothing stuck | ✅ M1 tests plus `tests/test_recovery.py` (interrupted merge, dirty clone, wrong branch, acceptance) |
 | V10.1 spend cap → budget gate, cloud calls stop | ✅ `test_planner_spend_reaches_cap_and_waits_for_approval`, `test_priced_node_charges_and_stops_at_cap`, `test_tasks_on_priced_nodes_wait_at_the_cap`, `test_rejecting_the_budget_pauses_the_project`, `test_raising_the_cap_in_settings_clears_the_checkpoint` |
-| Toolchain images | ✅ `tests/test_toolchain.py`, `test_toolchain_image_built_once_and_used`, `test_toolchain_must_derive_from_base` |
+| Toolchain images | ✅ `tests/test_images.py`, `test_tasks_run_in_the_project_toolchain_image`, `test_broken_toolchain_fails_as_configuration`, `test_toolchain_must_derive_from_base` |
 | Aider | ✅ command construction and "not installed → blocked, not retried" (`tests/test_recovery.py`). Not run against a real model in CI. |
 | Portfolio / progress | ✅ `test_progress_series_and_portfolio_fields`; screenshots via `scripts/screenshots.sh` |
 

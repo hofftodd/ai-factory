@@ -53,6 +53,7 @@ export default function NodesPage() {
             )}
             <div className="small">{n.models.length ? n.models.join(", ") : <span className="muted">no models listed</span>}</div>
             <ErrorNote error={checkErrors[n.id] ?? ""} />
+            <CapacityEditor node={n} onSaved={reload} />
             <div className="actions">
               <ActionButton
                 onClick={async () => {
@@ -62,17 +63,6 @@ export default function NodesPage() {
                 }}
               >
                 Check
-              </ActionButton>
-              <ActionButton
-                onClick={async () => {
-                  const v = prompt(`Capacity for ${n.name} (concurrent tasks and planner calls)`, String(n.capacity));
-                  if (v && Number(v) >= 1) {
-                    await patch(`/api/nodes/${n.id}`, { capacity: Number(v) });
-                    reload();
-                  }
-                }}
-              >
-                Capacity…
               </ActionButton>
               <ActionButton kind="danger" onClick={async () => { if (confirm(`Remove ${n.name}?`)) { await del(`/api/nodes/${n.id}`); reload(); } }}>
                 Remove
@@ -157,5 +147,36 @@ function NodeLoad({ n }: { n: Node }) {
         <div className={`meter-fill ${pct >= 100 ? "warm" : ""}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
+  );
+}
+
+// Edits a node's capacity in place. The scheduler re-reads nodes every tick, so a change
+// applies to the next task it starts; lowering it never stops tasks already running.
+function CapacityEditor({ node, onSaved }: { node: Node; onSaved: () => void }) {
+  const [value, setValue] = useState(node.capacity);
+  const [error, setError] = useState("");
+  return (
+    <form
+      className="row"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError("");
+        try {
+          await patch(`/api/nodes/${node.id}`, { capacity: value });
+          onSaved();
+        } catch (err) {
+          setError((err as Error).message);
+        }
+      }}
+    >
+      <label className="small muted">
+        Capacity{" "}
+        <input type="number" min={1} max={64} value={value} onChange={(e) => setValue(Number(e.target.value))} style={{ width: 64 }} />
+      </label>
+      <button className="btn" disabled={value === node.capacity}>
+        Save
+      </button>
+      <ErrorNote error={error} />
+    </form>
   );
 }

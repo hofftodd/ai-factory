@@ -145,7 +145,9 @@ class JobRunner:
             self.task_id = job.task_id
             self.payload = dict(job.payload or {})
         self.started_at = time.time()
-        self._buf: list[str] = []
+        # Streamed output waiting to be emitted, per event kind ("planner" is the reply,
+        # "planner_thinking" a thinking model's reasoning).
+        self._buf: dict[str, list[str]] = {}
         self._last_flush = time.monotonic()
 
     # -- helpers ------------------------------------------------------------
@@ -164,14 +166,21 @@ class JobRunner:
         return stop_requested(self.project_id, 0, self.started_at)
 
     def _on_text(self, text: str) -> None:
-        self._buf.append(text)
+        self._buffer("planner", text)
+
+    def _on_reasoning(self, text: str) -> None:
+        self._buffer("planner_thinking", text)
+
+    def _buffer(self, kind: str, text: str) -> None:
+        self._buf.setdefault(kind, []).append(text)
         if time.monotonic() - self._last_flush > FLUSH_S:
             self._flush()
 
     def _flush(self) -> None:
-        if self._buf:
-            emit(self.project_id, None, "planner", "".join(self._buf), job_id=self.job_id)
-            self._buf.clear()
+        for kind, parts in self._buf.items():
+            if parts:
+                emit(self.project_id, None, kind, "".join(parts), job_id=self.job_id)
+                parts.clear()
         self._last_flush = time.monotonic()
 
     def _record_usage(self, input_tokens: int, output_tokens: int) -> None:
@@ -204,12 +213,20 @@ class JobRunner:
             system,
             messages,
             on_text=self._on_text,
+            on_reasoning=self._on_reasoning,
             should_abort=self.should_abort,
         )
         self._flush()
         self._record_usage(result.input_tokens, result.output_tokens)
         spend.charge(self.project_id, node, result.input_tokens, result.output_tokens)
         if not result.text.strip():
+            if result.truncated:
+                doing = "thinking " if result.reasoning_chars else ""
+                raise JobFailed(
+                    f"the planner used its whole {result.max_tokens}-token output budget "
+                    f"{doing}without answering; give the node a larger context window "
+                    "or use a model that thinks less"
+                )
             raise JobFailed("the planner returned an empty response")
         return result.text
 

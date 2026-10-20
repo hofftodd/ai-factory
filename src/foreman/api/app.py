@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -19,10 +20,12 @@ from sqlalchemy import delete
 from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
-from foreman import gitops
+from foreman import github, gitops
 from foreman.api.inbox import router as inbox_router
 from foreman.api.schemas import (
     ControlRequest,
+    GitHubRepoCreate,
+    GitHubTokenUpdate,
     NodeCreate,
     NodeUpdate,
     ProjectCreate,
@@ -55,10 +58,13 @@ from foreman.core.models import (
 from foreman.core.state import (
     ACTIVE_STATES,
     ESTOP_FLAG,
+    GITHUB_TOKEN_KEY,
     emit,
     estop_active,
+    github_token,
     heartbeats,
     pending_stops,
+    set_app_setting,
     set_flag,
     transition,
 )
@@ -178,6 +184,72 @@ def system() -> dict[str, Any]:
         "executors": sorted(EXECUTORS),
         "pending_gates": len(gates.pending()),
     }
+
+
+# -- settings --------------------------------------------------------------
+
+
+def _github_token_out() -> dict[str, Any]:
+    # The token itself never leaves the server; the last characters tell tokens apart.
+    token, source = github_token()
+    return {"configured": bool(token), "source": source, "hint": token[-4:] if token else ""}
+
+
+@router.get("/api/settings/github")
+def get_github_token() -> dict[str, Any]:
+    return _github_token_out()
+
+
+@router.put("/api/settings/github")
+def put_github_token(body: GitHubTokenUpdate) -> dict[str, Any]:
+    set_app_setting(GITHUB_TOKEN_KEY, body.token.strip())
+    return _github_token_out()
+
+
+@router.delete("/api/settings/github")
+def delete_github_token() -> dict[str, Any]:
+    """Forget the dashboard token; FOREMAN_GITHUB_TOKEN, if set, applies again."""
+    set_app_setting(GITHUB_TOKEN_KEY, "")
+    return _github_token_out()
+
+
+def _require_github_token() -> str:
+    token, _ = github_token()
+    if not token:
+        raise HTTPException(400, "no GitHub token configured (Settings)")
+    return token
+
+
+@router.post("/api/settings/github/check")
+async def check_github_token() -> dict[str, Any]:
+    token = _require_github_token()
+    try:
+        user = await github.user(token)
+    except (github.GitHubError, httpx.HTTPError) as e:
+        return {**_github_token_out(), "ok": False, "error": str(e) or type(e).__name__}
+    return {**_github_token_out(), "ok": True, **user}
+
+
+@router.get("/api/github/owners")
+async def github_owners() -> list[str]:
+    """Accounts a new repository can be created under: the token's user, then its orgs."""
+    token = _require_github_token()
+    try:
+        return await github.owners(token)
+    except (github.GitHubError, httpx.HTTPError) as e:
+        raise HTTPException(502, str(e) or type(e).__name__) from e
+
+
+@router.post("/api/github/repos", status_code=201)
+async def create_github_repo(body: GitHubRepoCreate) -> dict[str, str]:
+    """Create a repository for a new project; the project is then added with its clone_url."""
+    token = _require_github_token()
+    try:
+        return await github.create_repo(
+            token, body.owner, body.name, body.private, body.description
+        )
+    except (github.GitHubError, httpx.HTTPError) as e:
+        raise HTTPException(400, str(e) or type(e).__name__) from e
 
 
 # -- projects --------------------------------------------------------------

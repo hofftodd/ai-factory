@@ -255,7 +255,7 @@ Each repair is logged in the project's activity feed.
 | Supervisor (Stop / E-stop) | `src/foreman/supervisor/main.py` |
 | Model gateway | `src/foreman/gateway.py` |
 | Containers and the locked-down network | `src/foreman/sandbox.py` |
-| Toolchain images | `src/foreman/toolchain.py` |
+| Toolchain images | `src/foreman/images.py` |
 | Context packs | `src/foreman/core/contextpack.py` |
 | Watchdog limits | `src/foreman/core/watchdog.py` |
 | Checkpoints and notifications | `src/foreman/core/gates.py` |

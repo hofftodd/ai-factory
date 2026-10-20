@@ -15,7 +15,7 @@ import asyncio
 import time
 from pathlib import Path
 
-from foreman import gitops, toolchain
+from foreman import gitops, images
 from foreman.config import get_settings
 from foreman.core import gates, watchdog
 from foreman.core.contextpack import build_pack
@@ -77,9 +77,8 @@ class TaskRunner:
         self.runtime = runtime or get_runtime()
         # Base URL of the model gateway as seen from executors, per network mode.
         self.gateway_urls = gateway_urls or {}
-        # Container image for this run's steps (set from the project's toolchain image).
-        self.image = ""
         self._tail: list[str] = []
+        self.image = ""  # set once the attempt's toolchain image is ready
         self.settings = get_settings()
         self.run_dir = self.settings.runs_dir / str(run_id)
         with session() as s:
@@ -162,6 +161,33 @@ class TaskRunner:
             kind = "budget" if reason.startswith("spend cap") else ""
             raise WatchdogTrip(f"watchdog: {reason}", reason, kind)
         return code
+
+    async def _toolchain_image(self, project_id: int, clone: Path) -> str:
+        """Build (or reuse) the project's .foreman/Dockerfile image for this attempt. A
+        broken Dockerfile is a configuration problem: retrying the agent can't fix it."""
+        if self.runtime.name != "docker" or images.project_dockerfile(clone) is None:
+            return ""
+        lines: list[str] = []
+
+        def output(line: str) -> None:
+            lines.append(line)
+            if len(lines) >= LOG_BATCH:
+                self._emit("log", "\n".join(lines), step="image")
+                lines.clear()
+
+        self._emit("system", f"preparing toolchain image from {images.DOCKERFILE}")
+        try:
+            tag = await images.ensure_image(
+                project_id, clone, on_output=output, on_handle=self._set_handle
+            )
+        except images.ImageBuildError as e:
+            self._check()  # a Stop that killed the build is a stop, not a failure
+            raise ConfigError(f"{e}; fix {images.DOCKERFILE}", e.output) from e
+        finally:
+            if lines:
+                self._emit("log", "\n".join(lines), step="image")
+        self._emit("system", f"toolchain image {tag}")
+        return tag
 
     def _watchdog_reason(self) -> str:
         with session() as s:
@@ -269,12 +295,8 @@ class TaskRunner:
             gitops.prepare_task_clone, task.project_id, self.task_id, project.milestone_branch
         )
         self._check()
-        try:
-            self.image = await toolchain.ensure_image(
-                task.project_id, clone, lambda line: self._emit("build", line)
-            )
-        except toolchain.ToolchainError as e:
-            raise ConfigError(str(e)) from e
+        # Fail fast on a broken Dockerfile, before any model or gateway work.
+        self.image = await self._toolchain_image(task.project_id, clone)
         self._check()
 
         # 1. Executor

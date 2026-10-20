@@ -107,3 +107,29 @@ async def test_list_models(llm, provider):
     assert await list_models(Node(name="n", provider=provider, base_url=base, api_key="k")) == (
         expected
     )
+
+
+def test_output_budget_uses_the_context_window():
+    from foreman.llm import ANTHROPIC_MAX_TOKENS, MIN_OUTPUT_TOKENS, output_budget
+
+    local = Node(name="n", base_url="x", context_window=65536)
+    prompt = [{"role": "user", "content": "x" * 40_000}]  # ~10k tokens
+    assert 50_000 < output_budget(local, "S", prompt) < 65536 - 10_000
+    tiny = Node(name="n", base_url="x", context_window=8192)
+    assert output_budget(tiny, "S", prompt) == MIN_OUTPUT_TOKENS
+    claude = Node(name="c", provider="anthropic", base_url="x", context_window=1_000_000)
+    assert output_budget(claude, "S", prompt) == ANTHROPIC_MAX_TOKENS
+
+
+async def test_reasoning_streams_separately(llm):
+    llm.reasoning = "thinking hard " * 10
+    node = Node(name="n", base_url=llm.url)
+    thoughts: list[str] = []
+    result = await stream_chat(
+        node, "m", "S", [{"role": "user", "content": "hi"}], on_reasoning=thoughts.append
+    )
+    assert "".join(thoughts) == llm.reasoning and "thinking" not in result.text
+    assert result.reasoning_chars == len(llm.reasoning) and not result.truncated
+    llm.finish = "length"
+    result = await stream_chat(node, "m", "S", [{"role": "user", "content": "hi"}], max_tokens=9)
+    assert result.truncated and result.max_tokens == 9 and llm.requests[-1]["max_tokens"] == 9
