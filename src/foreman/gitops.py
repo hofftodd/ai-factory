@@ -136,10 +136,35 @@ def changed_files(path: Path) -> list[str]:
     return sorted({f for f in (out + untracked).splitlines() if f})
 
 
-def diff_size(path: Path) -> int:
-    """Lines added + removed since the task started (committed changes)."""
+def head(path: Path) -> str:
+    return _read("rev-parse", "HEAD", cwd=path).strip()
+
+
+def has_commit(path: Path, sha: str) -> bool:
+    return bool(sha) and bool(_read("cat-file", "-t", sha, cwd=path).strip() == "commit")
+
+
+def changed_since(path: Path, base: str) -> list[str]:
+    """Files changed between `base` and HEAD."""
+    return sorted(f for f in _read("diff", "--name-only", base, "HEAD", cwd=path).splitlines() if f)
+
+
+def reset_to(path: Path, sha: str) -> None:
+    """Throw away commits and changes after `sha` (an agent stepped outside its role)."""
+    git("reset", "-q", "--hard", sha, cwd=path)
+    git("clean", "-q", "-fd", cwd=path)
+
+
+def clean_tree(path: Path) -> None:
+    """Drop anything a test run left behind (caches, outputs) so it is never committed."""
+    git("checkout", "-q", "--", ".", cwd=path, check=False)
+    git("clean", "-q", "-fd", cwd=path, check=False)
+
+
+def diff_size(path: Path, base: str = BASE_REF) -> int:
+    """Lines added + removed since `base` (the task start by default; committed changes)."""
     total = 0
-    for line in _read("diff", "--numstat", BASE_REF, cwd=path).splitlines():
+    for line in _read("diff", "--numstat", base, cwd=path).splitlines():
         added, removed, *_ = line.split("\t")
         if added.isdigit() and removed.isdigit():  # "-" for binary files
             total += int(added) + int(removed)

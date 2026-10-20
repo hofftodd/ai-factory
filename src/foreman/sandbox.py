@@ -29,6 +29,7 @@ from foreman.config import get_settings
 
 WORKSPACE = "/workspace"
 CTL = "/foreman"
+RESULTS = "/foreman-results"  # where the test runner writes junit.xml and coverage
 CONTAINER_UID = 1000
 
 
@@ -45,6 +46,14 @@ class StepSpec:
     network: str = "gateway"
     # Image override (per-project toolchain image); empty = the executor base image.
     image: str = ""
+    # Role sandboxing (Docker only; the local runtime has no isolation):
+    # the workspace mounted read-only (Tester), and workspace-relative directories
+    # mounted over it read-only (Builder: the tests) or writable (Tester: the tests).
+    workspace_readonly: bool = False
+    readonly_dirs: list[str] = field(default_factory=list)
+    writable_dirs: list[str] = field(default_factory=list)
+    # Host directory for test results, mounted writable at $FOREMAN_RESULTS.
+    results_dir: Path | None = None
 
 
 class Proc:
@@ -73,6 +82,7 @@ class LocalRuntime:
             "HOME": str(spec.ctl_dir / "home"),
             "FOREMAN_WORKSPACE": str(spec.workspace),
             "FOREMAN_CTL": str(spec.ctl_dir),
+            **({"FOREMAN_RESULTS": str(spec.results_dir)} if spec.results_dir else {}),
             **spec.env,
         }
         (spec.ctl_dir / "home").mkdir(parents=True, exist_ok=True)
@@ -94,9 +104,14 @@ class DockerRuntime:
         self.settings = get_settings()
 
     def _user(self, spec: StepSpec) -> str:
+        for rel in [*spec.readonly_dirs, *spec.writable_dirs]:
+            (spec.workspace / rel).mkdir(parents=True, exist_ok=True)  # mount points
         if os.getuid() == 0:
             # Never run agents as root: hand the mounts to the image's `agent` user.
-            for p in (spec.workspace, spec.ctl_dir):
+            paths = [spec.workspace, spec.ctl_dir]
+            if spec.results_dir:
+                paths.append(spec.results_dir)
+            for p in paths:
                 subprocess.run(
                     ["chown", "-R", f"{CONTAINER_UID}:{CONTAINER_UID}", str(p)], check=True
                 )
@@ -109,6 +124,7 @@ class DockerRuntime:
             "HOME": "/tmp/home",
             "FOREMAN_WORKSPACE": WORKSPACE,
             "FOREMAN_CTL": CTL,
+            **({"FOREMAN_RESULTS": RESULTS} if spec.results_dir else {}),
             **spec.env,
         }
         args = [
@@ -131,10 +147,7 @@ class DockerRuntime:
             "--security-opt",
             "no-new-privileges",
             *self._network_args(spec),
-            "-v",
-            f"{spec.workspace}:{WORKSPACE}",
-            "-v",
-            f"{spec.ctl_dir}:{CTL}:ro",
+            *self._mounts(spec),
             "-w",
             WORKSPACE,
             "--label",
@@ -147,6 +160,16 @@ class DockerRuntime:
         for k, v in env.items():
             args += ["-e", f"{k}={v}"]
         return [*args, spec.image or s.executor_image, *spec.command]
+
+    def _mounts(self, spec: StepSpec) -> list[str]:
+        ws = f"{spec.workspace}:{WORKSPACE}" + (":ro" if spec.workspace_readonly else "")
+        out = ["-v", ws, "-v", f"{spec.ctl_dir}:{CTL}:ro"]
+        for rel, mode in [*((d, "ro") for d in spec.readonly_dirs),
+                          *((d, "rw") for d in spec.writable_dirs)]:
+            out += ["-v", f"{spec.workspace / rel}:{WORKSPACE}/{rel}:{mode}"]
+        if spec.results_dir:
+            out += ["-v", f"{spec.results_dir}:{RESULTS}"]
+        return out
 
     def _network_args(self, spec: StepSpec) -> list[str]:
         if spec.network == "open":

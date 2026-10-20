@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from sqlmodel import col, select
 
-from foreman.core import gates, watchdog
+from foreman.core import gates, roles, watchdog
 from foreman.core.models import (
     GateKind,
     JobKind,
@@ -75,7 +75,7 @@ def decide(project: Project, task: Task, run: TaskRun) -> Decision:
         watchdog.limit(project, "split")
         and task.escalation_level < LEVEL_SPLIT
         and split_depth(task) < MAX_SPLIT_DEPTH
-        and bool(((project.role_bindings or {}).get("planner") or {}).get("node_id"))
+        and bool(roles.binding(project, roles.TASK_PLANNER))
     )
 
     if run.failure_kind == "config":

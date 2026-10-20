@@ -174,19 +174,22 @@ def test_claude_nodes_setup_binds_roles_and_is_idempotent(client, origin):
     p = make_project(client, origin)  # shell executor
     nodes = setup("sk-test", project_id=p["id"])
     assert {r: n.name for r, n in nodes.items()} == {
-        "planner": "claude-opus",
+        "project_planner": "claude-opus",
+        "task_planner": "claude-opus",
+        "tester": "claude-sonnet",
         "escalation": "claude-sonnet",
-        "executor": "claude-haiku",
+        "builder": "claude-haiku",
     }
-    assert nodes["executor"].price_in == 0.10 and nodes["planner"].price_out == 20.0
+    assert nodes["builder"].price_in == 0.10 and nodes["project_planner"].price_out == 20.0
     row = project(p["id"])
     assert row.executor_kind == "opencode"
-    assert row.role_bindings["executor"] == {
-        "node_id": nodes["executor"].id,
+    assert row.role_bindings["builder"] == {
+        "node_id": nodes["builder"].id,
         "model": "claude-haiku-5-5",
     }
+    assert row.role_bindings["tester"]["model"] == "claude-sonnet-5-5"
     again = setup("sk-rotated")
-    assert again["planner"].id == nodes["planner"].id  # updated, not duplicated
+    assert again["project_planner"].id == nodes["project_planner"].id  # updated, not duplicated
     listed = client.get("/api/nodes").json()
     assert len(listed) == 3 and not any("api_key" in n for n in listed)
     with pytest.raises(ValueError):

@@ -1,7 +1,8 @@
 """Live smoke test on Claude: one small project from idea to done, through the API.
 
 Runs against a Foreman that is already up (`foreman up`), with real models:
-Opus 5.5 plans and reviews, Sonnet 5.5 handles escalations, Haiku 5.5 codes.
+Opus 5.5 plans (Project and Task Planner), Sonnet 5.5 writes the tests and takes
+escalations, Haiku 5.5 writes the code.
 The project gets a spend cap, so a runaway costs at most that much.
 
     export ANTHROPIC_API_KEY=sk-ant-...
@@ -31,11 +32,10 @@ IDEA = """Build a tiny Python command-line tool, `wordfreq`, that prints the N m
 common words in a text file (case-insensitive, punctuation ignored), with unit
 tests using only the standard library (unittest). Keep it small: two or three
 modules at most. Please don't ask me questions: make sensible assumptions, then
-write spec.md, plan.md and validation.md, an executable acceptance test, and the
-acceptance command, all in this reply."""
+write the requirements, design and acceptance criteria, all in this reply."""
 
-NUDGE = """Please write any documents that are still missing (spec.md, plan.md,
-validation.md), the acceptance test, and the ACCEPTANCE_CMD block now."""
+NUDGE = """Please write any planning documents that are still missing (requirements,
+design, acceptance criteria) now."""
 
 
 class Foreman:
@@ -100,7 +100,8 @@ def ensure_nodes(f: Foreman, key: str, api_root: str) -> dict[str, dict[str, Any
         checked = f.call("POST", f"/api/nodes/{node['id']}/check")
         if not checked["healthy"]:
             raise SystemExit(f"{spec.name}: the Claude API rejected the key: {checked['error']}")
-        out[spec.role] = node
+        for role in spec.roles:
+            out[role] = node
     return out
 
 
@@ -121,7 +122,11 @@ def main() -> None:
     nodes = ensure_nodes(f, key, args.api_root)
     print("nodes: " + ", ".join(f"{r}={n['name']}" for r, n in nodes.items()))
 
-    roles = {spec.role: {"node_id": nodes[spec.role]["id"], "model": spec.model} for spec in NODES}
+    roles = {
+        role: {"node_id": nodes[role]["id"], "model": spec.model}
+        for spec in NODES
+        for role in spec.roles
+    }
     p = f.call(
         "POST",
         "/api/projects",
@@ -146,13 +151,14 @@ def main() -> None:
             sys.exit(f"planner failed: {job.get('error')}")
         spec = f.call("GET", f"/api/projects/{pid}/spec")
         docs = spec.get("docs") or {}
-        missing = [d for d in ("spec", "plan", "validation") if not docs.get(d, "").strip()]
-        if not missing and f.project(pid)["acceptance_cmd"].strip():
+        wanted = ("requirements", "design", "acceptance")
+        missing = [d for d in wanted if not docs.get(d, "").strip()]
+        if not missing:
             break
         message = NUDGE
     else:
         sys.exit("the planner didn't produce all documents; see the dashboard")
-    print("spec ready; acceptance: " + f.project(pid)["acceptance_cmd"])
+    print("planning documents ready")
 
     # Breakdown, then plan approval.
     f.call("POST", f"/api/projects/{pid}/spec/approve")

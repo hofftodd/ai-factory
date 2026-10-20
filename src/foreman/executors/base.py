@@ -39,8 +39,10 @@ class Executor(Protocol):
         ctl_dir: Path,
         prompt: str,
         provider: str = "openai",
+        role: str = "",
     ) -> ExecutorInvocation:
         """`endpoint` is the base URL the executor must use (the run's model gateway
         URL, ending in /v1); it carries no credentials. `provider` says which API it
-        speaks: "openai" (chat completions) or "anthropic" (Claude Messages)."""
+        speaks: "openai" (chat completions) or "anthropic" (Claude Messages). `role` is
+        the agent being run ("tester" / "builder"; "" for a single-step scripted task)."""
         ...

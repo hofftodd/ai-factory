@@ -27,6 +27,7 @@ class ProjectCreate(BaseModel):
     gates: dict[str, Any] = Field(default_factory=dict)
     watchdog: dict[str, Any] = Field(default_factory=dict)
     spend_cap_usd: float = Field(default=0.0, ge=0)
+    min_task_coverage: int = Field(default=80, ge=0, le=100)
 
 
 class ProjectUpdate(BaseModel):
@@ -42,14 +43,20 @@ class ProjectUpdate(BaseModel):
     watchdog: dict[str, Any] | None = None
     push_after_merge: bool | None = None
     spend_cap_usd: float | None = Field(default=None, ge=0)
+    min_task_coverage: int | None = Field(default=None, ge=0, le=100)
+    test_paths: list[str] | None = None
 
 
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1)
+    # The goal, in plain language.
     description: str = ""
+    # Plain-language acceptance criteria; the Tester turns them into tests.
+    criteria: list[str] = Field(default_factory=list)
     todos: list[str] = Field(default_factory=list)
+    # Scripted (shell executor) tasks only: Foreman's own tests and demos.
     allowed_globs: list[str] = Field(default_factory=list)
-    validation_cmd: str = Field(min_length=1)
+    validation_cmd: str = ""
     deps: list[int] = Field(default_factory=list)
     executor_kind: str = ""
     node_id: int | None = None
@@ -60,6 +67,7 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     title: str | None = None
+    criteria: list[str] | None = None
     req_refs: list[str] | None = None
     context_files: list[str] | None = None
     description: str | None = None

@@ -23,7 +23,7 @@ from sqlmodel import col, select
 
 from foreman import gitops
 from foreman.config import get_settings
-from foreman.core import gates, spend
+from foreman.core import gates, roles, spend
 from foreman.core.models import (
     JobKind,
     JobState,
@@ -50,8 +50,8 @@ from foreman.executors import get_executor
 from foreman.gateway import Gateway, new_token, serve
 from foreman.llm import list_models
 from foreman.orchestrator import gate_actions, milestone
-from foreman.orchestrator.jobs import JobRunner, finish_job
-from foreman.orchestrator.runner import TaskRunner, resolve_executor
+from foreman.orchestrator.jobs import JobRunner, finish_job, job_role
+from foreman.orchestrator.runner import TaskRunner, first_role, resolve_executor, uses_pipeline
 from foreman.sandbox import Runtime, ensure_egress_lockdown, get_runtime, kill_handle
 
 log = logging.getLogger("foreman.orchestrator")
@@ -200,11 +200,15 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             continue
         if any(by_id.get(d) is None or by_id[d].state != TaskState.DONE for d in t.deps):
             continue
-        kind, nid, model = resolve_executor(p, t)
+        kind, _, _ = resolve_executor(p, t)
         try:
-            needs_node = get_executor(kind).needs_node
+            executor = get_executor(kind)
+            needs_node = executor.needs_node
         except ValueError:
-            needs_node = False
+            executor, needs_node = None, False
+        # The first agent this attempt runs decides the node it needs.
+        role = first_role(t) if executor and uses_pipeline(t, executor) else roles.BUILDER
+        _, nid, model = resolve_executor(p, t, role)
         if needs_node and nid is not None:
             if not node_available(nodes.get(nid), load):
                 continue
@@ -277,6 +281,13 @@ class Orchestrator:
                 model=model,
                 gateway_token=new_token(),
             )
+            p = s.get(Project, t.project_id)
+            try:
+                kind = t.executor_kind or (p.executor_kind if p else "")
+                if uses_pipeline(t, get_executor(kind)):
+                    run.step = first_role(t)
+            except ValueError:
+                pass
             s.add(t)
             s.add(run)
             s.commit()
@@ -329,7 +340,7 @@ class Orchestrator:
             if job.project_id in stopping or job.project_id in paused:
                 continue
             # Planner calls share node capacity with task attempts.
-            binding = ((projects[job.project_id].role_bindings or {}).get("planner") or {})
+            binding = roles.binding(projects[job.project_id], job_role(job.kind))
             nid = binding.get("node_id")
             if nid is not None:
                 if not node_available(nodes.get(nid), load):

@@ -37,7 +37,7 @@ from foreman.api.schemas import (
 from foreman.api.spec import recheck_task_size
 from foreman.api.spec import router as spec_router
 from foreman.config import get_settings
-from foreman.core import gates, spend, watchdog
+from foreman.core import gates, roles, spend, watchdog
 from foreman.core.models import (
     Control,
     ControlAction,
@@ -53,6 +53,8 @@ from foreman.core.models import (
     Task,
     TaskRun,
     TaskState,
+    TestCase,
+    TestRun,
     now,
 )
 from foreman.core.state import (
@@ -106,6 +108,7 @@ def _node_out(n: Node, load: dict[int, dict[str, int]] | None = None) -> dict[st
 
 def _node_load() -> dict[int, dict[str, int]]:
     """Per node: work running on it now, and queued tasks that will run on it."""
+    from foreman.orchestrator.jobs import job_role
     from foreman.orchestrator.main import node_load
     from foreman.orchestrator.runner import resolve_executor
 
@@ -125,7 +128,7 @@ def _node_load() -> dict[int, dict[str, int]]:
             out.setdefault(task_node, {"active": 0, "waiting": 0})["waiting"] += 1
     for j in jobs:
         p = projects.get(j.project_id)
-        bound = ((p.role_bindings or {}).get("planner") or {}).get("node_id") if p else None
+        bound = roles.binding(p, job_role(j.kind)).get("node_id") if p else None
         if isinstance(bound, int):
             out.setdefault(bound, {"active": 0, "waiting": 0})["waiting"] += 1
     return out
@@ -152,9 +155,11 @@ def _reopen(project_id: int) -> None:
 
 
 def _check_bindings(bindings: dict[str, Any]) -> None:
-    """Bound nodes must exist. (Any provider can run executors: they reach it through
-    the model gateway, which holds the key, so no key enters a sandbox - NFR-5.)"""
+    """Known roles, existing nodes. (Any provider can serve the Tester and Builder: they
+    reach it through the model gateway, which holds the key - NFR-5.)"""
     for role, binding in bindings.items():
+        if role not in (*roles.BINDING_KEYS, "planner", "executor"):
+            raise HTTPException(400, f"unknown role {role!r}")
         node_id = (binding or {}).get("node_id")
         if node_id is None:
             continue
@@ -334,6 +339,7 @@ async def create_project(body: ProjectCreate) -> Project:
         watchdog=body.watchdog,
         network=body.network,
         spend_cap_usd=body.spend_cap_usd,
+        min_task_coverage=body.min_task_coverage,
     )
     with session() as s:
         s.add(p)
@@ -429,6 +435,17 @@ def create_task(project_id: int, body: TaskCreate) -> Task:
     p = _get(Project, project_id)
     if body.executor_kind and body.executor_kind not in EXECUTORS:
         raise HTTPException(400, f"unknown executor {body.executor_kind}")
+    if (body.executor_kind or p.executor_kind) == "shell":
+        if not body.validation_cmd.strip():
+            raise HTTPException(400, "scripted (shell) tasks need a validation command")
+    else:
+        # Agent tasks: the Tester decides how to test them, from the criteria.
+        if body.validation_cmd or body.allowed_globs:
+            raise HTTPException(
+                400, "agent tasks take a goal and criteria; the Tester writes their tests"
+            )
+        if not [c for c in body.criteria if c.strip()]:
+            raise HTTPException(400, "give the task at least one acceptance criterion")
     _check_deps(project_id, body.deps)
     t = Task(project_id=project_id, **body.model_dump(), origin="manual")
     if p.phase == ProjectPhase.PLAN_REVIEW:
@@ -510,6 +527,87 @@ def discard_task(task_id: int) -> Task:
     if not transition(task_id, (t.state,), TaskState.DISCARDED, "discarded by user"):
         raise HTTPException(409, f"cannot discard a task in state {t.state.value}")
     return _get(Task, task_id)
+
+
+# -- test results and coverage ------------------------------------------------------
+
+
+def _run_out(run: TestRun, cases: list[TestCase] | None = None) -> dict[str, Any]:
+    out = run.model_dump()
+    if cases is not None:
+        out["cases"] = [c.model_dump() for c in cases]
+    return out
+
+
+def _cases(run_id: int | None) -> list[TestCase]:
+    with session() as s:
+        q = select(TestCase).where(TestCase.test_run_id == run_id).order_by(col(TestCase.id))
+        return list(s.exec(q))
+
+
+@router.get("/api/tasks/{task_id}/tests")
+def task_tests(task_id: int) -> dict[str, Any]:
+    """The task's test runs (Tester: red, Builder: green), newest first, the latest with
+    every case."""
+    _get(Task, task_id)
+    with session() as s:
+        runs = s.exec(
+            select(TestRun).where(TestRun.task_id == task_id).order_by(col(TestRun.id).desc())
+        ).all()
+    return {
+        "runs": [_run_out(r, _cases(r.id) if i == 0 else None) for i, r in enumerate(runs)],
+    }
+
+
+@router.get("/api/projects/{project_id}/tests")
+def project_tests(project_id: int) -> dict[str, Any]:
+    """The latest full-suite result for the project (the last merged task's verify run, or
+    the latest acceptance check), with its cases."""
+    _get(Project, project_id)
+    with session() as s:
+        latest = s.exec(
+            select(TestRun)
+            .where(TestRun.project_id == project_id, TestRun.step == "builder")
+            .order_by(col(TestRun.id).desc())
+        ).first()
+        acceptance = s.exec(
+            select(TestRun)
+            .where(TestRun.project_id == project_id, TestRun.step == "acceptance")
+            .order_by(col(TestRun.id).desc())
+        ).first()
+    return {
+        "suite": _run_out(latest, _cases(latest.id)) if latest else None,
+        "acceptance": _run_out(acceptance, _cases(acceptance.id)) if acceptance else None,
+    }
+
+
+@router.get("/api/projects/{project_id}/coverage-trend")
+def coverage_trend(project_id: int) -> list[dict[str, Any]]:
+    """Coverage and test counts after each verified task, oldest first."""
+    _get(Project, project_id)
+    with session() as s:
+        runs = s.exec(
+            select(TestRun)
+            .where(TestRun.project_id == project_id, TestRun.step == "builder")
+            .order_by(col(TestRun.id))
+        ).all()
+    return [
+        {
+            "ts": r.created_at,
+            "coverage": r.coverage,
+            "tests": r.passed + r.failed + r.errors,
+            "passed": r.passed,
+            "task_id": r.task_id,
+        }
+        for r in runs
+        if not r.problem
+    ]
+
+
+@router.get("/api/roles")
+def list_roles() -> list[dict[str, Any]]:
+    """The agents and what each may do (core/roles.py)."""
+    return roles.describe()
 
 
 @router.get("/api/tasks/{task_id}/diff")

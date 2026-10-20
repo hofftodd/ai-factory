@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import re
 import sys
 import threading
 import time
@@ -30,6 +31,19 @@ from typing import Any
 MODEL = "fake-coder"
 FILE_PATH = "hello.txt"
 FILE_CONTENT = "hello from the fake model\n"
+CHECK = "grep -q 'fake model' hello.txt\n"
+
+
+def agent_write(req: dict[str, Any]) -> tuple[str, str]:
+    """What the fake coding agent writes: the Tester a check for its task (or the
+    acceptance runner), the Builder (or a lone executor) hello.txt."""
+    text = json.dumps(req.get("messages", []))
+    if "You are the Tester Agent" in text:
+        if "This task: acceptance tests" in text:
+            return "tests/acceptance/run.sh", CHECK
+        m = re.search(r"# Task ([\w.-]+):", text)
+        return f"tests/check_{(m.group(1) if m else 'task').lower()}.sh", CHECK
+    return FILE_PATH, FILE_CONTENT
 CHUNK = 24
 
 Planner = Callable[[dict[str, Any]], str]
@@ -71,6 +85,9 @@ class FakeLLM:
         # thinking model; `finish` overrides the finish reason (e.g. "length").
         self.reasoning = ""
         self.finish: str | None = None
+        # Stop reasons for successive Messages API replies (default end_turn), e.g.
+        # ["pause_turn"] to pause the first one like a long server-side research turn.
+        self.anthropic_stops: list[str] = []
         self.disconnected = threading.Event()
         outer = self
 
@@ -255,7 +272,12 @@ class FakeLLM:
                     "message_delta",
                     {
                         "type": "message_delta",
-                        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                        "delta": {
+                            "stop_reason": outer.anthropic_stops.pop(0)
+                            if outer.anthropic_stops
+                            else "end_turn",
+                            "stop_sequence": None,
+                        },
                         "usage": {"output_tokens": 5},
                     },
                 )
@@ -341,10 +363,22 @@ class FakeLLM:
     def decide(self, req: dict[str, Any]) -> tuple[dict[str, Any], str]:
         messages = req.get("messages", [])
         tools = {t.get("function", {}).get("name") for t in req.get("tools") or []}
+        if "web_search" in tools and not any(m.get("role") == "tool" for m in messages):
+            # A planner with research tools looks something up first.
+            call = {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": json.dumps({"query": "x"})},
+            }
+            return {"role": "assistant", "content": None, "tool_calls": [call]}, "tool_calls"
+        if "web_search" in tools:
+            text = self.planner(req) if self.planner else "Fake task"
+            return {"role": "assistant", "content": text}, "stop"
         if any(m.get("role") == "tool" for m in messages):
             return {"role": "assistant", "content": "Done."}, "stop"
         if "write" in tools:
-            args = json.dumps({"filePath": FILE_PATH, "content": FILE_CONTENT})
+            path, content = agent_write(req)
+            args = json.dumps({"filePath": path, "content": content})
             call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "type": "function",
@@ -366,7 +400,7 @@ class FakeLLM:
             return {
                 "id": f"toolu_{uuid.uuid4().hex[:8]}",
                 "name": "write",
-                "input": {"filePath": FILE_PATH, "content": FILE_CONTENT},
+                "input": dict(zip(("filePath", "content"), agent_write(req), strict=True)),
             }
         return None
 
@@ -378,77 +412,76 @@ class FakeLLM:
         self.server.shutdown()
 
 
-DEMO_SPEC = """# Spec: greeter
+DEMO_REQUIREMENTS = """# Requirements: greeter
 
 A tiny command-line greeter.
 
-## Functional requirements
-- FR-1.1 `greet(name)` returns `hello, <name>`.
-- FR-1.2 Running `greeter <name>` prints the greeting.
+## Functional
+- FR-1.1 Greeting someone by name gives "hello, <name>" in lowercase.
+- FR-1.2 Running the greeter with a name prints the greeting.
 
 ## Non-functional
-- NFR-1 No dependencies beyond the standard library.
+- NFR-1 No dependencies beyond the language's standard library.
 """
 
-DEMO_PLAN = """# Plan
+DEMO_DESIGN = """# Design
 
-- `greeter/core.py`: `greet(name) -> str` (FR-1.1)
-- `greeter/cli.py`: argument parsing, prints `greet(name)` (FR-1.2)
+Two parts:
 
-Milestone 1: both, with unit tests next to each module.
+- **Greeting**: turns a name into the greeting text. It knows nothing about the
+  command line, so other parts can reuse it. (FR-1.1)
+- **Command line**: reads the name it is given and prints the greeting from the
+  greeting part. (FR-1.2)
+
+Decision: keep the greeting separate from input and output, so it can be tested on
+its own.
 """
 
-DEMO_VALIDATION = """# Validation
+DEMO_ACCEPTANCE = """# Acceptance criteria
 
-- V1 (FR-1.1): `greet("bob") == "hello, bob"`
-- V2 (FR-1.2): `greeter bob` prints `hello, bob`
-- Acceptance: `sh tests/acceptance/run.sh` exits 0.
+- AC-1 (FR-1.1) Greeting "bob" gives "hello, bob".
+- AC-2 (FR-1.2) Running the greeter with "bob" prints "hello, bob".
+- AC-3 (NFR-1) Installing the greeter needs nothing beyond the standard library.
 """
 
 DEMO_TASKS = [
     {
         "key": "T1",
-        "title": "greet() function",
+        "title": "Greeting",
+        "goal": "Turn a name into the greeting text.",
         "req_refs": ["FR-1.1"],
-        "description": "Implement greet(name) in greeter/core.py with a unit test.",
-        "todos": ["Create greeter/core.py", "Add tests/test_core.py"],
-        "allowed_files": ["greeter/core.py", "tests/test_core.py"],
-        "context_files": [],
-        "validation_cmd": "test -f README.md",
+        "criteria": ['Greeting "bob" gives "hello, bob"', "The greeting is lowercase"],
         "deps": [],
+        "size": "small",
     },
     {
         "key": "T2",
         "title": "Command-line entry point",
+        "goal": "Print the greeting for the name given on the command line.",
         "req_refs": ["FR-1.2"],
-        "description": "Parse the name argument and print greet(name).",
-        "todos": ["Create greeter/cli.py", "Add tests/test_cli.py"],
-        "allowed_files": ["greeter/cli.py", "tests/test_cli.py"],
-        "context_files": ["greeter/core.py"],
-        "validation_cmd": "test -f README.md",
+        "criteria": ['Running the greeter with "bob" prints "hello, bob"'],
         "deps": ["T1"],
+        "size": "small",
     },
 ]
 
 
 def demo_planner(req: dict[str, Any]) -> str:
     """A scripted planner for demos and browser tests (greeter project)."""
-    if "Break the approved plan" in system_text(req):
+    if "break the project into small, ordered tasks" in system_text(req):
         return "```json\n" + json.dumps(DEMO_TASKS, indent=2) + "\n```"
     turns = sum(1 for m in req.get("messages", []) if m.get("role") == "user")
     if turns == 1:
         return (
-            "Happy to help. A first draft of the spec is below.\n\n"
-            f"<<<FILE specs/001-initial/spec.md\n{DEMO_SPEC}>>>\n\n"
+            "Happy to help. I drafted the requirements.\n\n"
+            f"<<<FILE specs/001-initial/requirements.md\n{DEMO_REQUIREMENTS}>>>\n\n"
             "Should the greeting be lowercase (`hello, bob`) or capitalised?"
         )
     return (
-        "Lowercase it is. I wrote the plan, the validation criteria and an acceptance test.\n\n"
-        f"<<<FILE specs/001-initial/plan.md\n{DEMO_PLAN}>>>\n"
-        f"<<<FILE specs/001-initial/validation.md\n{DEMO_VALIDATION}>>>\n"
-        "<<<FILE tests/acceptance/run.sh\ntest -f README.md\n>>>\n"
-        "<<<ACCEPTANCE_CMD\nsh tests/acceptance/run.sh\n>>>\n"
-        "If this looks right, approve the spec and I'll break it into tasks."
+        "Lowercase it is. I wrote the design and the acceptance criteria.\n\n"
+        f"<<<FILE specs/001-initial/design.md\n{DEMO_DESIGN}>>>\n"
+        f"<<<FILE specs/001-initial/acceptance-criteria.md\n{DEMO_ACCEPTANCE}>>>\n"
+        "If this looks right, approve the documents and the work will be broken into tasks."
     )
 
 

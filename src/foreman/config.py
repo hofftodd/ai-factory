@@ -38,6 +38,9 @@ class Settings:
     # Model gateway: executors reach their model through the orchestrator.
     gateway_host: str = field(default_factory=lambda: _env("GATEWAY_HOST", "0.0.0.0"))
     gateway_port: int = field(default_factory=lambda: int(_env("GATEWAY_PORT", "8701")))
+    # Web search for the Project Planning Agent on local models: a SearXNG URL (JSON
+    # output enabled). Claude nodes use Anthropic's own search and need nothing here.
+    search_url: str = field(default_factory=lambda: _env("SEARCH_URL", ""))
     # How often the orchestrator checks each node's health.
     node_check_s: float = field(default_factory=lambda: float(_env("NODE_CHECK_S", "60")))
 

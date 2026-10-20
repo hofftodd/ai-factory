@@ -62,6 +62,7 @@ class OpenCodeExecutor:
         ctl_dir: Path,
         prompt: str,
         provider: str = "openai",
+        role: str = "",
     ) -> ExecutorInvocation:
         if not endpoint or not model:
             raise ValueError("opencode executor needs a model endpoint and a model")

@@ -92,13 +92,13 @@ def _claude_nodes(args: argparse.Namespace) -> None:
     except ValueError as e:
         sys.exit(str(e))
     for spec in NODES:
-        n = nodes[spec.role]
+        n = nodes[spec.roles[0]]
         print(
-            f"{n.name:<14} {spec.model:<18} {spec.role:<11} capacity {n.capacity}, "
+            f"{n.name:<14} {spec.model:<18} {', '.join(spec.roles):<30} capacity {n.capacity}, "
             f"${n.price_in:g} / ${n.price_out:g} per M tokens in / out"
         )
     if args.project is not None:
-        print(f"project {args.project}: planner, escalation and executor now use these nodes")
+        print(f"project {args.project}: every agent role now uses these nodes")
     else:
         print("assign them under a project's Settings, or rerun with --project ID")
 
