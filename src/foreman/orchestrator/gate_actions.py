@@ -14,8 +14,11 @@ from foreman.db import session
 log = logging.getLogger("foreman.gates")
 
 
-def send_back_to_tester(task_id: int, frm: tuple[TaskState, ...], note: str = "") -> None:
-    """The task's tests may be wrong or thin: the Tester writes them again."""
+def send_back_to_tester(
+    task_id: int, frm: tuple[TaskState, ...], note: str = "", source: str = "user"
+) -> None:
+    """The task's tests may be wrong or thin: the Tester writes them again. The `sent_back`
+    event carries the note (the user's, or the Builder's report) to the Tester's briefing."""
     with session() as s:
         t = s.get(Task, task_id)
         if t is None or t.state not in frm:
@@ -24,9 +27,11 @@ def send_back_to_tester(task_id: int, frm: tuple[TaskState, ...], note: str = ""
         t.escalation_level, t.level_failures = 0, 0
         s.add(t)
         s.commit()
-    transition(
+        project_id = t.project_id
+    if transition(
         task_id, frm, TaskState.QUEUED, "sent back to the Tester" + (f": {note}" if note else "")
-    )
+    ):
+        emit(project_id, task_id, "sent_back", note, source=source)
 
 
 async def handle(gate: Gate) -> None:

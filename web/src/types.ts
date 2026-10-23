@@ -15,14 +15,16 @@ export type TaskState =
 export interface RoleBinding {
   node_id: number | null;
   model: string;
+  reasoning_effort?: string;
 }
 
-export type ProjectPhase = "specify" | "decomposing" | "plan_review" | "execute" | "done";
+export type ProjectPhase = "specify" | "decomposing" | "plan_review" | "environment" | "execute" | "done";
 
 export interface Project {
   id: number;
   name: string;
   phase: ProjectPhase;
+  env_commit: string;
   feature: string;
   acceptance_cmd: string;
   max_task_files: number;
@@ -39,7 +41,6 @@ export interface Project {
   repo_url: string;
   default_branch: string;
   milestone_branch: string;
-  test_cmd: string;
   executor_kind: string;
   network: "isolated" | "open";
   role_bindings: Record<string, RoleBinding>;
@@ -148,6 +149,7 @@ export interface FEvent {
     | "planner_thinking"
     | "research"
     | "denied"
+    | "sent_back"
     | "planner_start"
     | "planner_end"
     | "watchdog"
@@ -186,7 +188,7 @@ export interface SpecMessage {
 
 export interface PlannerJob {
   id: number;
-  kind: "chat" | "decompose";
+  kind: "chat" | "decompose" | "split" | "review" | "environment";
   state: "queued" | "running" | "done" | "failed" | "stopped";
   error: string;
   model: string;

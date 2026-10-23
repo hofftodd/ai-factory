@@ -10,8 +10,8 @@ def test_project_lifecycle(client, origin):
     p = make_project(client, origin, name="demo")
     assert p["default_branch"] == "main"
     assert client.get("/api/projects").json()[0]["name"] == "demo"
-    r = client.patch(f"/api/projects/{p['id']}", json={"test_cmd": "true"})
-    assert r.json()["test_cmd"] == "true"
+    r = client.patch(f"/api/projects/{p['id']}", json={"name": "renamed"})
+    assert r.json()["name"] == "renamed"
     assert client.delete(f"/api/projects/{p['id']}").status_code == 204
     assert client.get("/api/projects").json() == []
 

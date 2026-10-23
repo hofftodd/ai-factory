@@ -11,13 +11,15 @@ plans with the client, break the job into pieces small enough for one worker,
 hand each piece out, check the work, adjust the plan as things come up, and
 stop everything if something goes wrong.
 
-Foreman does that for software, with four kinds of worker, each allowed to
+Foreman does that for software, with five kinds of worker, each allowed to
 do one job and nothing else:
 
 - the **Project Planning Agent** agrees the requirements, design and
   acceptance criteria with you, in plain language;
 - the **Task Planning Agent** breaks that work into small tasks and keeps the
   task list up to date;
+- the **Environment Agent** prepares, once the plan is approved, the toolchain
+  image every other agent works in;
 - the **Tester Agent** writes the tests for each task, before any code exists;
 - the **Builder Agent** writes the code that makes those tests pass.
 
@@ -44,16 +46,19 @@ flowchart LR
     sup -- kills --> box
 ```
 
-## The four agents
+## The five agents
 
 ```mermaid
 flowchart TB
     you([You]) <-- chat, approvals --> pp
     orch{{Orchestrator<br/>plain code, no model}}
-    orch --> pp & tp & tester & builder
+    orch --> pp & tp & env & tester & builder
     pp[Project Planning Agent] -- writes --> docs[(Documents<br/>requirements · design ·<br/>acceptance criteria)]
     docs -- reads --> tp[Task Planning Agent]
     tp -- manages --> tasks[(Tasks)]
+    docs & tasks -- read --> env[Environment Agent]
+    env -- writes --> image[(Toolchain image<br/>.foreman/)]
+    image -. runs every step .-> tester & builder
     tasks --> tester[Tester Agent]
     tasks --> builder[Builder Agent]
     tester -- writes and runs --> tests[(Tests)]
@@ -66,8 +71,9 @@ flowchart TB
 |---|---|---|
 | Project Planning Agent | write the requirements, design and acceptance criteria (markdown); talk with you; research topics on the web | write code, tests or commands; create or change tasks |
 | Task Planning Agent | read the documents; create, split, change and remove tasks, in plain language; propose a change to the documents (you decide) | write documents, code or tests; name files or commands |
-| Tester Agent | write and change files under the project's test paths (`tests/` by default); run commands and tests | change any file outside the test paths |
-| Builder Agent | write and change code, docs (`README.md`, `ARCHITECTURE.md`) and the toolchain Dockerfile; run commands, including the tests | change any test |
+| Environment Agent | read the documents and the task list; write the toolchain Dockerfile and its check script (`.foreman/`) | write code, tests or documents |
+| Tester Agent | write and change files under the project's test paths (`tests/` by default); run commands and tests | change any file outside the test paths, or the toolchain image |
+| Builder Agent | write and change code and docs (`README.md`, `ARCHITECTURE.md`); run commands, including the tests | change any test, or the toolchain image |
 
 The point of the split: **the agent that writes the code can't shape the
 tests that judge it**, and the planners think about *what* to build, never
@@ -152,21 +158,46 @@ Everything lives under the data directory (`./data` by default):
    first, and a size. No file lists and no commands: deciding how to test
    and build it is the Tester's and Builder's job. Foreman adds three
    standard tasks to every plan:
-   - **Project setup** (first): the toolchain, the project skeleton, the test
-     runner, and a first `README.md` and `ARCHITECTURE.md`;
+   - **Project setup** (first): the project skeleton, the test runner, and a
+     first `README.md` and `ARCHITECTURE.md`;
    - **Acceptance tests**: the Tester turns the acceptance criteria into
      executable tests (`tests/acceptance/`), the project's definition of
-     done;
+     done. They test through what the documents fix (the program's
+     commands, inputs and outputs), never through function names they would
+     have to guess. They fail until the project is finished, so they run on their
+     own (`tests/acceptance/run.sh`) and stay out of `tests/run.sh`, the
+     suite every task must pass; Foreman fails the task if they don't. If an
+     older project's runner still includes them, their results never count
+     for a task, and every task's briefing says to leave them alone;
    - **Documentation** (last): `README.md` (what the project is, how to run
      it, how to test it) and `ARCHITECTURE.md` brought up to date with what
      was built.
 3. **Review the plan** (on by default). You see the tasks before anything
    runs, and can edit, remove or approve them.
-4. **Execute.** Tasks run one at a time per project, in dependency order.
-   Several projects can run side by side on different model servers.
-5. **Done.** When every task is done, the acceptance tests run on a fresh
+4. **Prepare the environment.** The Environment Agent reads the documents
+   and the approved tasks, and writes `.foreman/Dockerfile` and
+   `.foreman/check.sh` (one command per tool, proving it is installed).
+   Like the planners it has no tools: Foreman builds the image on the host,
+   runs the check inside it as the agent user with no network, and shows
+   the agent any failure to fix (three tries, then you decide: try again
+   with a note, or skip). The files are committed only once both pass. From
+   then on every step of every task runs in that image, and `.foreman/` is
+   read-only to the Tester and Builder, whose briefings list what it
+   provides. The agent runs again when you press *Rebuild environment*, or
+   after going back to planning if the requirements or design changed. (No
+   Docker, no images: with the local runtime this step is skipped.)
+5. **Execute.** Tasks run one at a time per project, in dependency order.
+   Several projects can run side by side on different model servers. You
+   can go **back to planning** at any point when nothing is running: the
+   project returns to step 1 with its finished tasks kept. The next
+   breakdown is told what is already done and plans only the rest (no
+   second setup; the acceptance tests again only if their criteria
+   changed), and approving it discards the old plan's unfinished tasks.
+6. **Done.** When every task is done, the acceptance tests run on a fresh
    copy of the milestone branch. If they fail, the Task Planner gets the
-   output and adds work. If they pass, the project is done and, after your
+   output and adds repair tasks. The planner describes work in plain language,
+   so each repair task's Tester and Builder are also shown the failing
+   acceptance tests, to find exactly which calls must change. If they pass, the project is done and, after your
    approval, the branch is pushed and a GitHub pull request opened.
 
 ## One task, step by step
@@ -176,25 +207,41 @@ Tester from its criteria.
 
 1. **Get ready.** Foreman gives the task its own clone of the milestone
    branch and, if the project has a `.foreman/Dockerfile`, makes sure its
-   toolchain image is built.
+   toolchain image is built. A later attempt reuses the clone, keeping the
+   work so far, and first merges in whatever other tasks have merged since,
+   so the task builds on the latest code and its own merge stays clean. If
+   its work conflicts with theirs, retrying can't help: the task is blocked
+   at once and the inbox asks you to start it over or resolve the conflict.
 2. **Tester step.** The Tester gets a briefing (the task's goal and criteria,
    the requirements it covers, the relevant part of the design, an outline
    of the code, the existing tests) and writes tests for the task. Foreman
    commits, checks that only test files changed, then runs the whole suite.
    The new tests are expected to fail at this point: nothing implements them
-   yet. A Tester step that adds no tests fails.
+   yet, and at least one must: tests that already pass test something that
+   is already there, so the step fails. A Tester step that adds no tests
+   fails too.
 3. **Builder step.** The Builder gets the same briefing plus the Tester's
    tests in full, and writes code until the tests pass. It can run the tests
-   but not change them. Foreman commits, checks that no test changed and
-   that the change isn't suspiciously large.
+   but not change them, nor the test configuration (`conftest.py`, the
+   pytest and coverage sections of `pyproject.toml`, jest config and the
+   like) outside the setup task, since that could skip a test. Foreman
+   commits, checks that no test or test configuration changed and that the
+   change isn't suspiciously large. If an older test contradicts the task's
+   tests, the Builder reports it instead, and the task goes back to the
+   Tester with the report (once; a second report fails the attempt). You can
+   also send a failed or stopped task back to the Tester yourself, with a
+   note it will see.
 4. **Verify.** Foreman runs the whole suite on the result, inside the
    sandbox, and records every test's result and the code coverage. Any
    failure fails the step.
 5. **Coverage check.** Foreman works out how many of the lines the Builder
    added or changed were run by the tests ("changed-line coverage"). Below
    the project's minimum (80% by default), the task goes back to the Tester
-   once to add tests; if it is still below, the inbox asks you to accept it
-   anyway or send it back. Set the minimum to 0 to only report coverage.
+   once to add tests, told the coverage and which files need it most; if it
+   is still below, the inbox asks you to accept it anyway or send it back
+   (your note goes to the Tester). Set the minimum to 0 to only report
+   coverage. The setup task only reports it: its code is a skeleton that
+   later tasks fill in and test.
 6. **Merge.** The task is merged into the milestone branch (or waits for
    your approval if you turned that checkpoint on).
 7. **Review.** Before the next task starts, the Task Planner looks at the
@@ -242,8 +289,9 @@ API keys.
 with no internet, no LAN and no access to your machine. The only thing on
 that network is a tiny relay to Foreman's model gateway. A project that
 genuinely needs internet in its tasks can switch to an "open" network.
-Packages a project needs are installed in its toolchain image, which is
-built with network access before any agent runs.
+Packages a project needs are installed in its toolchain image, which the
+Environment Agent writes and Foreman builds, with network access, before any
+agent runs.
 
 **The model gateway.** Each attempt gets a secret address for its model that
 works only for that attempt. The gateway forwards requests to the right model server and, on the
@@ -397,6 +445,7 @@ Each repair is logged in the project's activity feed.
 | Model gateway | `src/foreman/gateway.py` |
 | Containers and the locked-down network | `src/foreman/sandbox.py` |
 | Toolchain images | `src/foreman/images.py` |
+| The Environment Agent | `src/foreman/orchestrator/environment.py` |
 | Context packs | `src/foreman/core/contextpack.py` |
 | Watchdog limits | `src/foreman/core/watchdog.py` |
 | Checkpoints and notifications | `src/foreman/core/gates.py` |

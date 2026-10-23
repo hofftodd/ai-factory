@@ -4,6 +4,9 @@ import { ActionButton, ErrorNote, Field, lines } from "../components";
 import { usePoll } from "../hooks";
 import type { Project, Task } from "../types";
 
+// Tasks of an earlier plan that approving this one replaces (back to planning).
+const UNFINISHED: Task["state"][] = ["queued", "failed", "paused", "stopped_by_user", "blocked"];
+
 const KIND_LABEL: Record<Task["kind"], string> = {
   setup: "standard task: setup",
   acceptance: "standard task: acceptance tests",
@@ -126,6 +129,8 @@ export default function PlanReview({ project, onChange }: { project: Project; on
   const [error, setError] = useState("");
   const proposed = (tasks ?? []).filter((t) => t.state === "proposed");
   const blocked = proposed.filter((t) => t.size_violations.length > 0);
+  const finished = (tasks ?? []).filter((t) => t.state === "done").length;
+  const replaced = (tasks ?? []).filter((t) => UNFINISHED.includes(t.state)).length;
   const refresh = () => {
     reload();
     onChange();
@@ -141,6 +146,12 @@ export default function PlanReview({ project, onChange }: { project: Project; on
             each one the Tester Agent writes the tests from its criteria, then the Builder Agent writes the code until
             they pass. Nothing runs until you approve.
           </p>
+          {(finished > 0 || replaced > 0) && (
+            <p className="small">
+              This plans the remaining work: {finished} finished task{finished === 1 ? " stays" : "s stay"}
+              {replaced > 0 && `, and approving replaces the earlier plan's ${replaced} unfinished task${replaced === 1 ? "" : "s"}`}.
+            </p>
+          )}
         </div>
         <div className="actions">
           <ActionButton

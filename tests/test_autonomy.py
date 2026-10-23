@@ -208,6 +208,18 @@ async def test_split_after_retries(client, origin, llm, planner):
     assert planner.calls.count("split") == 1
 
 
+async def test_standard_tasks_are_not_split(client, origin, llm, planner):
+    p = auto_project(client, origin, llm)
+    t = make_task(client, p["id"], script="exit 1", title="Project setup")
+    with session() as s:
+        row = s.get(Task, t["id"])
+        row.kind = "setup"
+        s.add(row)
+        s.commit()
+    await drive(Orchestrator(), lambda: task(t["id"]).state == TaskState.BLOCKED)
+    assert planner.calls.count("split") == 0
+
+
 async def test_unusable_split_blocks(client, origin, llm, planner):
     p = auto_project(client, origin, llm)
     t = make_task(client, p["id"], script="exit 1")

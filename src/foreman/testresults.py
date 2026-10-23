@@ -185,6 +185,14 @@ def is_task_case(case: Case, test_files: list[str]) -> bool:
     return False
 
 
+def in_dir(case: Case, rel_dir: str) -> bool:
+    """Whether a test case lives under `rel_dir`, by its file or its dotted class name."""
+    d = rel_dir.strip("/")
+    if case.file and f"/{d}/" in "/" + case.file.lstrip("./"):
+        return True
+    return case.classname.startswith(d.replace("/", ".") + ".")
+
+
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 

@@ -23,9 +23,11 @@ ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8
 
+# ripgrep: OpenCode's Grep and Glob tools need it, and would otherwise try to download
+# it at run time, which the sandbox's network lockdown blocks.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git bash tar gzip socat \
+      ca-certificates curl git bash tar gzip socat ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 # OpenCode: single static binary from the GitHub release.

@@ -9,6 +9,7 @@ const PHASE_LABEL: Record<Project["phase"], string> = {
   specify: "specifying",
   decomposing: "planning",
   plan_review: "plan review",
+  environment: "preparing environment",
   execute: "executing",
   done: "done",
 };
@@ -106,7 +107,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
     name: "",
     repo_url: "",
     milestone_branch: "foreman/m1",
-    test_cmd: "",
     executor_kind: "pi",
     node_id: "",
     model: "",
@@ -157,7 +157,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
             name: form.name,
             repo_url: repoUrl,
             milestone_branch: form.milestone_branch,
-            test_cmd: form.test_cmd,
             executor_kind: form.executor_kind,
             push_after_merge: form.push_after_merge,
             skip_spec: form.skip_spec,
@@ -223,9 +222,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
         )}
         <Field label="Milestone branch" hint="Finished tasks merge here">
           <input value={form.milestone_branch} onChange={(e) => set("milestone_branch", e.target.value)} />
-        </Field>
-        <Field label="Project test command" hint="Run after every task to catch regressions (optional)">
-          <input value={form.test_cmd} placeholder="e.g. pytest -q" onChange={(e) => set("test_cmd", e.target.value)} />
         </Field>
         <Field label="Executor">
           <select value={form.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>

@@ -247,14 +247,6 @@ def build_pack(
             "Run it yourself before finishing.",
             "",
         ]
-    if project.test_cmd:
-        lines += [
-            "The project test suite must also keep passing:",
-            "```",
-            project.test_cmd,
-            "```",
-            "",
-        ]
     if previous_failure:
         lines += ["## Previous attempt failed", previous_failure.strip(), ""]
     lines += ["Do not commit; the orchestrator commits your changes."]
@@ -301,11 +293,15 @@ def build_prompt(project: Project, task: Task, previous_failure: str = "") -> st
 
 # -- role packs (Tester / Builder) ----------------------------------------------------
 
+ENV_CHECK = ".foreman/check.sh"
+
 RESULTS_CONTRACT = [
     "## How tests run",
-    "`tests/run.sh` runs the whole test suite. It must exit non-zero when any test fails "
-    "and write, into the directory `$FOREMAN_RESULTS`:",
-    "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, gotestsum);",
+    "`tests/run.sh` runs the whole test suite except the acceptance tests "
+    "(`tests/acceptance/`, which run through their own `tests/acceptance/run.sh`). It must "
+    "exit non-zero when any test fails and write, into the directory `$FOREMAN_RESULTS`:",
+    "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, "
+    "gotestsum);",
     "- `coverage.xml` (Cobertura) or `lcov.info`: line coverage of the project's code.",
     "There is no internet access: use only what the toolchain image provides.",
     "",
@@ -315,10 +311,15 @@ KIND_NOTES = {
     "tester": {
         "setup": [
             "## This task: project setup",
-            "Create `tests/run.sh` following the contract below (pick the project's test "
-            "framework and coverage tool from the design), and a first smoke test that "
-            "checks the project's entry point exists. The Builder sets up the toolchain "
-            "and skeleton afterwards to make it pass.",
+            "Create `tests/run.sh` following the contract below, and a first smoke test that "
+            "checks the project's entry point exists. The Builder writes the skeleton "
+            "afterwards to make it pass.",
+            "`tests/run.sh` must leave `tests/acceptance/` out (e.g. pytest "
+            "`--ignore=tests/acceptance`): the acceptance tests are written next, run on "
+            "their own and fail until the whole project is finished.",
+            "Use the language, test framework and coverage tool the requirements and design "
+            "name; the toolchain image (below) provides them. Never pick a language because "
+            "it happens to be installed.",
             "",
         ],
         "acceptance": [
@@ -327,6 +328,15 @@ KIND_NOTES = {
             "`tests/acceptance/`, and write `tests/acceptance/run.sh`, which runs only those "
             "tests and follows the same results contract. They are the definition of done "
             "for the whole project, so they will fail until the work is finished.",
+            "Test through what the requirements and design fix: the program's commands, "
+            "inputs, outputs and files, or an interface the design names. Never invent "
+            "function names, module layouts or return shapes the documents leave open: the "
+            "code is written later and may be organised differently, and a test that guessed "
+            "can never pass. When a criterion is about a calculation, check it through the "
+            "program's output unless the design names the function.",
+            "Keep them out of `tests/run.sh`, the suite every task must pass: if it would "
+            "run `tests/acceptance/`, change it to leave that directory out. Foreman checks "
+            "this.",
             "",
         ],
         "docs": [
@@ -340,11 +350,10 @@ KIND_NOTES = {
     "builder": {
         "setup": [
             "## This task: project setup",
-            "Write `.foreman/Dockerfile` (FROM foreman/executor-base) installing the "
-            "language toolchain, test framework and coverage tool the tests need, the "
-            "project skeleton, a README.md (what the project is, how to run it, how to "
-            "test it) and an ARCHITECTURE.md (how the project is organised, following the "
-            "design).",
+            "Write the project skeleton, a README.md (what the project is, how to run it, "
+            "how to test it) and an ARCHITECTURE.md (how the project is organised, following "
+            "the design). The toolchain image (below) already provides the language and "
+            "tools.",
             "",
         ],
         "docs": [
@@ -374,15 +383,17 @@ def build_role_pack(
     docs: dict[str, str],
     test_paths: list[str],
     task_tests: list[str] | None = None,
-    base_image: str = "",
     context_window: int | None = None,
     previous_failure: str = "",
+    sent_back: str = "",
+    failing_acceptance: list[str] | None = None,
 ) -> ContextPack:
     """The briefing for the Tester or the Builder on one task.
 
     `docs` maps planning-document keys (requirements, design, acceptance) to their
     repo paths; `task_tests` are the files the Tester wrote for this task (shown to
-    the Builder in full)."""
+    the Builder in full); `sent_back` says why the task's tests came back to the Tester;
+    `failing_acceptance` lists the acceptance tests a repair task was added to fix."""
     files = repo_files(repo) if (repo / ".git").exists() else []
     test_dirs = ", ".join(f"`{d}/`" for d in test_paths)
     lines = [f"# Task {task.key or task.id}: {task.title}", ""]
@@ -392,14 +403,27 @@ def build_role_pack(
             "done, and should fail until the Builder Agent implements it. Then run them.",
             f"You may only create or change files under {test_dirs}. Everything else is "
             "read-only: changes there are rejected.",
+            "The whole suite must be able to pass once this task is built. If an existing "
+            "test checks that something this task implements is missing or unimplemented, "
+            "or pins behaviour this task changes, update or remove that test.",
             "",
         ]
     else:
+        config = "" if task.kind == "setup" else (
+            " Do not change the test configuration either (`conftest.py`, `pytest.ini`, the "
+            "pytest or coverage sections of `pyproject.toml`, jest or vitest config and the "
+            "like): such changes are rejected."
+        )
         lines += [
             "You are the Builder Agent. Write the code that makes this task's tests pass, "
             "without breaking the rest of the test suite.",
-            f"You may change any file except the tests ({test_dirs}), which are read-only: "
-            "you can run them but not edit them.",
+            f"You may change any file except the tests ({test_dirs}) and the toolchain image "
+            "(`.foreman/`), which are read-only: you can run the tests but not edit them."
+            + config,
+            "If another test contradicts this task's tests, so that both can never pass, do "
+            "not work around it: never skip, deselect or special-case a test. Write which tests "
+            "conflict and why into `$FOREMAN_RESULTS/tests-conflict.md` and finish; the task "
+            "goes back to the Tester.",
             "",
         ]
     lines += KIND_NOTES.get(role, {}).get(task.kind, [])
@@ -408,7 +432,12 @@ def build_role_pack(
     if task.criteria:
         lines += ["## Done when", *[f"- {c}" for c in task.criteria], ""]
     missing: list[str] = []
-    if task.req_refs:
+    if task.kind == "setup":
+        # Setup references no requirement ids, but must see the technology choices.
+        requirements = _doc(repo, docs.get("requirements"), limit=400)
+        if requirements:
+            lines += ["## Requirements (the whole project)", requirements, ""]
+    elif task.req_refs:
         requirements = _read(repo, docs.get("requirements", ""))
         slice_text, missing = requirement_slice(requirements, task.req_refs)
         if slice_text:
@@ -426,16 +455,59 @@ def build_role_pack(
             source = _read(repo, rel)
             if source:
                 lines += [f"`{rel}`:", _fence(rel), _clip(source), "```", ""]
-    if role == "builder" and task.kind == "setup" and base_image:
-        lines += ["## Toolchain image", base_image, ""]
+    check = _read(repo, ENV_CHECK)
+    if check.strip():
+        lines += [
+            "## Toolchain image",
+            "Everything here runs in the project's toolchain image, prepared by the "
+            "Environment Agent. `.foreman/` is read-only to you. Its check script shows what "
+            "is installed:",
+            "```sh",
+            _clip(check),
+            "```",
+            "",
+        ]
     lines += RESULTS_CONTRACT
     lines += ["Run the suite with `sh tests/run.sh`.", ""]
+    if failing_acceptance:
+        lines += [
+            "## Failing acceptance tests",
+            "This task was added because these acceptance tests still fail after every other "
+            "task was done. It is done when the ones it is about pass:",
+            *[f"- {c}" for c in failing_acceptance],
+            "",
+            "Read the ones this task is about in `tests/acceptance/` first: they show exactly "
+            "which functions or commands are called and what must come back. The goal and "
+            "criteria above say what to do; the acceptance tests say where.",
+        ]
+        if role == "tester":
+            lines.append(
+                "Write this task's tests against those same calls, so that they fail now for "
+                "the same reason. Another function that already behaves correctly does not "
+                "count: the acceptance tests decide which call must work."
+            )
+        else:
+            lines.append(
+                "Once this task's tests pass, run `sh tests/acceptance/run.sh` to check those "
+                "acceptance tests too; others may still fail for reasons outside this task."
+            )
+        lines.append("")
+    elif task.kind != "acceptance" and (repo / "tests" / "acceptance").is_dir():
+        lines += [
+            "## Acceptance tests",
+            "`tests/acceptance/` holds the whole project's acceptance tests. Many fail until "
+            "the project is finished: that is expected and not part of this task. Don't run "
+            "or investigate them; their failures never count against this task.",
+            "",
+        ]
     if files:
         shown = files[:200]
         lines += ["## Repository files", *shown]
         if len(files) > len(shown):
             lines.append(f"... and {len(files) - len(shown)} more")
         lines.append("")
+    if sent_back:
+        lines += ["## Sent back to you", sent_back.strip(), ""]
     if previous_failure:
         lines += ["## Previous attempt failed", previous_failure.strip(), ""]
     lines += ["Do not commit; the orchestrator commits your changes."]

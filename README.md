@@ -2,9 +2,9 @@
 
 A self-hosted dashboard that takes a GitHub project through a spec-driven
 SDLC with AI agents: interactive specification, then autonomous execution of
-small, context-bounded tasks on local (or cloud) models, by four agents with
-strictly separate jobs (a Project Planner, a Task Planner, a Tester and a
-Builder), with an orchestrator that enforces their roles, watches for
+small, context-bounded tasks on local (or cloud) models, by five agents with
+strictly separate jobs (a Project Planner, a Task Planner, an Environment
+Agent, a Tester and a Builder), with an orchestrator that enforces their roles, watches for
 runaway agents, replans after each task, and a big red stop button.
 
 Status: **M4 (multi-node & polish) implemented**: all planned milestones are
@@ -31,8 +31,9 @@ the agents working through the tasks. More in [Screenshots](#screenshots).*
 |---|---|---|
 | **Project Planning Agent** | Talks with you; writes the requirements, design and acceptance criteria as human-readable markdown; researches unfamiliar topics on the web | Write code, tests, commands or tasks |
 | **Task Planning Agent** | Reads the documents; breaks the work into plain-language tasks (goal, "done when" criteria, dependencies, size); reviews the plan after each task | Write documents, code or tests; name files or commands |
+| **Environment Agent** | Once the plan is approved, writes the toolchain image (`.foreman/Dockerfile`) and a check script proving every tool the project needs is installed; Foreman builds and checks it before any task runs | Write code, tests or documents |
 | **Tester Agent** | Writes each task's tests before the code exists, the acceptance tests, and the test runner; runs tests | Change anything outside the test folders |
-| **Builder Agent** | Writes the code (plus `README.md`, `ARCHITECTURE.md` and the toolchain Dockerfile) until the tests pass; runs the tests | Change any test |
+| **Builder Agent** | Writes the code (plus `README.md` and `ARCHITECTURE.md`) until the tests pass; runs the tests | Change any test or the toolchain image |
 
 The orchestrator (plain code, no model) enforces this: planners have no tools
 and only their allowed actions are read from their replies; the Tester and
@@ -52,14 +53,23 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
 3. **Breakdown.** The Task Planning Agent splits the work into
    plain-language tasks: a goal, the requirements covered, up to six "done
    when" criteria, dependencies and a size. Every plan also gets three
-   standard tasks: **project setup** (toolchain, skeleton, test runner,
+   standard tasks: **project setup** (skeleton, test runner,
    first `README.md` and `ARCHITECTURE.md`), **acceptance tests** (the
-   definition of done) and **documentation** (last: `README.md` explains the
+   definition of done, kept out of the suite each task must pass) and **documentation** (last: `README.md` explains the
    project, how to run it and how to test it; `ARCHITECTURE.md` how it's
    built).
 4. **Review the plan** (optional checkpoint, on by default). Edit, drop or
    re-run tasks. `tasks.md` is committed alongside the documents.
-5. **Execute, autonomously.** Tasks run one at a time per project in Docker
+5. **Prepare the environment.** The Environment Agent reads the documents
+   and the approved tasks and writes `.foreman/Dockerfile` (the language,
+   test framework, coverage and build tools) plus `.foreman/check.sh`.
+   Foreman builds the image on the host, runs the check inside it without
+   network, and sends any errors back to the agent (three tries, then it
+   asks you: try again with a note, or skip). Only then does any task
+   start. Every agent of every task works in that one image, and none of
+   them can change it; *Rebuild environment* on the project runs the agent
+   again if something turns out to be missing.
+6. **Execute, autonomously.** Tasks run one at a time per project in Docker
    containers built from `ubuntu:24.04`, using [pi](https://pi.dev) as the
    coding agent (or OpenCode or Aider, per project or task). pi's own prompt
    is about 1.4k tokens against OpenCode's 7.4k, and context packs are sized
@@ -68,11 +78,12 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
    - **Tester:** writes tests from the task's criteria; they must fail
      first. Only test files may change.
    - **Builder:** writes code until those tests and the whole suite pass.
-     Tests are read-only to it.
+     Tests and the test configuration are read-only to it; tests that
+     contradict each other go back to the Tester with its report.
    - **Verify:** the suite runs in the sandbox; every result and the line
      coverage are recorded. If too few of the changed lines are covered
      (default minimum 80%), the task goes back to the Tester once, then asks
-     you.
+     you. The setup task's skeleton only reports coverage.
    - **Merge** into the milestone branch.
 
    Around that:
@@ -82,10 +93,9 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      the coverage of its changes; the project page shows the latest suite,
      the acceptance tests and coverage over time.
    - **Toolchain.** Containers start from `foreman/executor-base` (Ubuntu,
-     git, pi and OpenCode, no language runtimes on PATH). A project's
-     `.foreman/Dockerfile` (`FROM foreman/executor-base`, written by the
-     Builder in the setup task) is built into a per-project image before the
-     first task and rebuilt only when it changes; agents, tests and
+     git, pi and OpenCode, no language runtimes on PATH). The Environment
+     Agent's `.foreman/Dockerfile` (`FROM foreman/executor-base`) is built
+     into a per-project image and reused until it changes; agents, tests and
      acceptance checks run in it. Builds can be stopped like any task.
    - **Network.** Executor containers run as an unprivileged user on an
      internal Docker network where the only thing reachable is a relay to
@@ -103,8 +113,9 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      limit kills the step.
    - **Escalation.** A failed step is retried with a fresh agent session
      (told why the last one failed); if that keeps failing, or the same
-     failure repeats, the Task Planner splits the task into smaller ones;
-     then it moves to an optional stronger *escalation* model; then it is
+     failure repeats, the Task Planner splits the task into smaller ones
+     (never setup, acceptance tests or documentation, whose instructions
+     depend on what they are); then it moves to an optional stronger *escalation* model; then it is
      blocked and lands in your inbox, where you can also send it back to the
      Tester if the tests look wrong.
    - **Replanning.** After each task, the Task Planner checks the remaining
@@ -113,7 +124,14 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      `tasks.md` is updated. Growth beyond a cap (default +50% of the
      approved plan) waits for your approval. Document changes are only
      proposed; once you approve, the Project Planner makes them.
-6. **Done.** When every task is done, the acceptance tests run on a fresh
+   - **Back to planning.** To change course yourself, press *Back to
+     planning* on the project (once nothing is running). No new tasks start
+     while you talk to the Project Planner and edit the documents. When you
+     approve them, the Task Planner plans only the remaining work: finished
+     tasks are kept and not redone, setup isn't repeated, and the acceptance
+     tests are updated only if their criteria changed. Approving the new plan
+     discards the old plan's unfinished tasks.
+7. **Done.** When every task is done, the acceptance tests run on a fresh
    checkout of the milestone branch. If they fail, the Task Planner gets the
    output and adds work. If they pass, the project is done, and after your
    approval the branch is pushed and a GitHub pull request is opened.
@@ -225,7 +243,10 @@ what's waiting for them and, for paid ones, prices.
 ![Nodes](docs/screenshots/nodes.png)
 
 **Project settings:** which model each agent uses and which one takes over
-when a step is stuck (local or Claude), the coverage minimum and test paths,
+when a step is stuck (local or Claude), how hard the Tester, Builder and
+escalation model reason (sent to the model's chat template as
+`reasoning_effort`, the way llama.cpp, vLLM and SGLang take it; *default*
+leaves the model's own), the coverage minimum and test paths,
 plus the sandbox network, spend cap, watchdog limits, autonomy and
 checkpoints.
 
@@ -353,6 +374,7 @@ requests and the E-stop flag and is never written by the orchestrator, so a
 hung orchestrator holding a write lock cannot block a Stop.
 
 Each task works in its own standalone clone (`data/projects/<id>/tasks/<task>`),
+which every attempt first brings up to date with the milestone branch,
 mounted at `/workspace` in the container, with the test folders read-only
 for the Builder, or everything but the test folders read-only for the
 Tester. The rendered prompt and tool config are mounted read-only at

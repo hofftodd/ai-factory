@@ -41,6 +41,7 @@ TRANSITIONS: dict[TaskState, set[TaskState]] = {
         TaskState.FAILED,
         TaskState.PAUSED,
         TaskState.STOPPED_BY_USER,
+        TaskState.QUEUED,  # the Builder reports contradicting tests: back to the Tester
     },
     TaskState.VALIDATING: {
         TaskState.DONE,

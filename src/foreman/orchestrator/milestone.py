@@ -70,13 +70,13 @@ def ready_for_acceptance(project: Project) -> bool:
 
 def acceptance_command(project: Project) -> str:
     """The definition of done: the project's acceptance command, else the Tester's
-    acceptance runner, else the project test command."""
+    acceptance runner."""
     if project.acceptance_cmd:
         return project.acceptance_cmd
     assert project.id is not None
     if (gitops.repo_dir(project.id) / ACCEPTANCE_RUNNER).is_file():
         return f"sh {ACCEPTANCE_RUNNER}"
-    return project.test_cmd
+    return ""
 
 
 def _store(project: Project, head: str, results: Path, clone: Path) -> None:

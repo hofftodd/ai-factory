@@ -37,14 +37,17 @@ CHECK = "grep -q 'fake model' hello.txt\n"
 
 def agent_write(req: dict[str, Any]) -> tuple[str, str]:
     """What the fake coding agent writes: the Tester a check for its task (or the
-    acceptance runner), the Builder (or a lone executor) hello.txt."""
+    acceptance runner), the Builder (or a lone executor) hello.txt. The standard setup
+    and docs tasks use their own file, so every task's new check fails until it is built."""
     text = json.dumps(req.get("messages", []))
+    m = re.search(r"# Task ([\w.-]+):", text)
+    key = m.group(1) if m else "task"
+    path = f"{key.lower()}.txt" if key in ("SETUP", "DOCS") else FILE_PATH
     if "You are the Tester Agent" in text:
         if "This task: acceptance tests" in text:
             return "tests/acceptance/run.sh", CHECK
-        m = re.search(r"# Task ([\w.-]+):", text)
-        return f"tests/check_{(m.group(1) if m else 'task').lower()}.sh", CHECK
-    return FILE_PATH, FILE_CONTENT
+        return f"tests/check_{key.lower()}.sh", f"grep -q 'fake model' {path}\n"
+    return path, FILE_CONTENT
 
 
 CHUNK = 24

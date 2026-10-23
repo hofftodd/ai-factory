@@ -132,6 +132,28 @@ def test_standard_tasks_frame_the_plan():
     assert any("README.md" in c for c in by_key[SETUP].criteria)
 
 
+def test_replan_keeps_finished_standard_tasks():
+    done = {SETUP: "setup", ACCEPTANCE: "acceptance", DOCS: "docs", "T9": "feature"}
+    features = parse_tasks(TASKS, done=("T9",))
+    planned = standard_tasks(features, done, acceptance_changed=False)
+    assert [t.key for t in planned] == ["T2", "T1", "DOCS-2"]  # no setup, no acceptance
+    by_key = {t.key: t for t in planned}
+    assert by_key["T1"].deps == [] and set(by_key["DOCS-2"].deps) == {"T1", "T2"}
+    changed = standard_tasks(features, done, acceptance_changed=True)
+    assert [t.key for t in changed] == ["ACCEPT-2", "T2", "T1", "DOCS-2"]
+    assert changed[0].title == "Update the acceptance tests"
+
+
+def test_replan_reserves_finished_keys_and_drops_deps_on_them():
+    items = [{"key": "T5", "title": "x", "criteria": ["c"], "deps": ["T1"]}]
+    (t,) = parse_tasks(json.dumps(items), done=("T1",))
+    assert t.deps == []
+    with pytest.raises(PlanError, match="duplicate or reserved keys: T1"):
+        parse_tasks(json.dumps([{**items[0], "key": "T1"}]), done=("T1",))
+    prompt = decompose_system_prompt(P, {}, [{"key": "T1", "title": "Done thing"}])
+    assert "## Already done" in prompt and "Done thing" in prompt
+
+
 def test_find_cycle():
     assert find_cycle({"a": ["b"], "b": ["c"], "c": ["a"]}) == ["a", "b", "c", "a"]
     assert find_cycle({"a": ["b"], "b": []}) == []

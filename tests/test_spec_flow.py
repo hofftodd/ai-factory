@@ -317,6 +317,94 @@ async def test_reopen_and_redecompose(client, origin, llm):
         assert s.exec(select(Task).where(Task.project_id == pid)).all() == []
 
 
+REMAINING = [
+    {
+        "key": "T3",
+        "title": "Shout the greeting",
+        "goal": "The command line can shout.",
+        "req_refs": ["FR-1.2"],
+        "criteria": ["Running it with --shout prints HELLO, BOB"],
+        "deps": ["T1"],  # finished: dropped
+    }
+]
+
+
+def states(pid: int) -> dict[str, TaskState]:
+    with session() as s:
+        return {
+            t.key: t.state
+            for t in s.exec(select(Task).where(Task.project_id == pid).order_by(col(Task.id)))
+        }
+
+
+async def test_back_to_planning_replans_the_remaining_work(client, origin, llm):
+    llm.planner = scripted(decompose=lambda n: GOOD_TASKS if n == 1 else REMAINING)
+    p = spec_project(client, origin, llm, watchdog={"escalation": False})
+    pid = p["id"]
+    orch = Orchestrator()
+    await approved(client, orch, pid)
+    with session() as s:
+        t2 = s.exec(select(Task).where(Task.project_id == pid, Task.key == "T2")).one()
+    failing = {"executor_kind": "shell", "executor_script": "exit 1"}
+    client.patch(f"/api/tasks/{t2.id}", json=failing)
+    assert client.post(f"/api/projects/{pid}/plan/approve").status_code == 200
+    idle = lambda: job_states(pid)[-1] not in (JobState.QUEUED, JobState.RUNNING)  # noqa: E731
+    await drive(orch, lambda: states(pid)["T2"] == TaskState.FAILED and idle(), timeout=60)
+    assert states(pid)["T1"] == TaskState.DONE and states(pid)["DOCS"] == TaskState.QUEUED
+
+    assert client.post(f"/api/projects/{pid}/spec/reopen").status_code == 200
+    assert project(pid).phase == ProjectPhase.SPECIFY
+    for _ in range(3):
+        await orch.tick()
+    assert states(pid)["DOCS"] == TaskState.QUEUED  # nothing runs while planning
+    new_criteria = ACCEPTANCE + "- AC-2 (FR-1.2) Shouting gives HELLO, BOB\n"
+    r = client.put(f"/api/projects/{pid}/spec/docs/acceptance", json={"content": new_criteria})
+    assert r.status_code == 200
+
+    assert client.post(f"/api/projects/{pid}/spec/approve").status_code == 200
+    await drive(orch, lambda: project(pid).phase != ProjectPhase.DECOMPOSING)
+    assert project(pid).phase == ProjectPhase.PLAN_REVIEW
+    prompt = system_text(llm.requests[-1])
+    assert "## Already done" in prompt and "Write greeter" in prompt
+    with session() as s:
+        proposed = s.exec(
+            select(Task)
+            .where(Task.project_id == pid, Task.state == TaskState.PROPOSED)
+            .order_by(col(Task.id))
+        ).all()
+    # Setup is done; the acceptance criteria changed, so those tests are updated.
+    assert [t.key for t in proposed] == ["ACCEPT-2", "T3", "DOCS"]
+    assert proposed[1].deps == []  # the finished T1 needs no waiting for
+    assert states(pid)["T2"] == TaskState.FAILED  # still there until the plan is approved
+
+    assert client.post(f"/api/projects/{pid}/plan/approve").status_code == 200
+    assert project(pid).phase == ProjectPhase.EXECUTE
+    with session() as s:
+        rows = s.exec(select(Task).where(Task.project_id == pid).order_by(col(Task.id))).all()
+    by_state = {(t.key, t.state) for t in rows}
+    assert ("T1", TaskState.DONE) in by_state and ("SETUP", TaskState.DONE) in by_state
+    assert ("T2", TaskState.DISCARDED) in by_state and ("DOCS", TaskState.DISCARDED) in by_state
+    assert {t.key for t in rows if t.state == TaskState.QUEUED} == {"ACCEPT-2", "T3", "DOCS"}
+    tasks_md = client.get(f"/api/projects/{pid}/spec").json()["docs"]["tasks"]
+    assert "## T1: Write greeter" in tasks_md and "## T3: Shout the greeting" in tasks_md
+    assert "## T2:" not in tasks_md
+
+
+async def test_cannot_go_back_to_planning_while_a_task_runs(client, origin, llm):
+    p = spec_project(client, origin, llm)
+    pid = p["id"]
+    await approved(client, Orchestrator(), pid)
+    assert client.post(f"/api/projects/{pid}/plan/approve").status_code == 200
+    with session() as s:
+        t = s.exec(select(Task).where(Task.project_id == pid, Task.key == "SETUP")).one()
+        t.state = TaskState.RUNNING
+        s.add(t)
+        s.commit()
+    r = client.post(f"/api/projects/{pid}/spec/reopen")
+    assert r.status_code == 409 and "SETUP is running" in r.json()["detail"]
+    assert project(pid).phase == ProjectPhase.EXECUTE
+
+
 async def test_stop_aborts_planner_mid_stream_and_applies_nothing(client, origin, llm):
     """FR-8.2 for planner calls: Stop closes the model stream; no files are written."""
     llm.planner = scripted(chat=CHAT_REPLY + "\n" + "x" * 20000)

@@ -2,9 +2,16 @@
 
 Lifecycle of a project:
 
-    specify --approve spec--> decomposing --(planner)--> plan_review --approve plan--> execute
+    specify --approve spec--> decomposing --(planner)--> plan_review --approve plan-->
        ^                                                      |
        +------------------------- reopen ----------------------+
+
+    --> environment (the Environment Agent's toolchain image; skipped without Docker)
+    --> execute; reopen from either is going back to planning.
+
+Reopening an executing (or done) project is going back to planning: finished tasks are
+kept, the next breakdown plans only the remaining work, and approving that plan
+discards the earlier plan's unfinished tasks.
 
 The documents live in the project repository under specs/<feature>/ and every
 change is a commit on the milestone branch. Planner calls run as jobs in the
@@ -21,8 +28,8 @@ from sqlalchemy import delete
 from sqlmodel import col, select
 
 from foreman import gitops
-from foreman.api.schemas import ChatMessage, DocUpdate
-from foreman.core import roles
+from foreman.api.schemas import ChatMessage, DocUpdate, EnvironmentRebuild
+from foreman.core import gates, roles
 from foreman.core.contextpack import build_pack, repo_files, size_violations
 from foreman.core.models import (
     JobKind,
@@ -32,13 +39,16 @@ from foreman.core.models import (
     PlanRevision,
     Project,
     ProjectPhase,
+    RevisionState,
     SpecMessage,
     Task,
     TaskState,
     now,
 )
-from foreman.core.state import emit
+from foreman.core.state import ACTIVE_STATES, emit
 from foreman.db import session
+from foreman.orchestrator import environment
+from foreman.orchestrator.jobs import discard_unfinished, write_tasks_md
 from foreman.planner import DOC_NAMES, MAX_CRITERIA, doc_path
 
 router = APIRouter()
@@ -271,14 +281,59 @@ def redecompose(project_id: int) -> dict[str, Any]:
 
 @router.post("/api/projects/{project_id}/spec/reopen")
 def reopen_spec(project_id: int) -> dict[str, Any]:
-    """Back to the conversation: proposed tasks are dropped."""
+    """Back to the conversation: proposed tasks are dropped. From execute or done, this
+    is going back to planning; execution waits until a new plan is approved."""
     p = _project(project_id)
-    if p.phase != ProjectPhase.PLAN_REVIEW:
+    replanning = p.phase in (ProjectPhase.ENVIRONMENT, ProjectPhase.EXECUTE, ProjectPhase.DONE)
+    if p.phase != ProjectPhase.PLAN_REVIEW and not replanning:
         raise HTTPException(409, f"cannot reopen the spec in phase {p.phase.value}")
     _require_idle(project_id)
+    if replanning:
+        _require_quiet(p)
+        _drop_pending_revisions(project_id)
     _drop_proposed(project_id)
-    _set_phase(p, ProjectPhase.SPECIFY, spec_approved_at=None)
+    _set_phase(p, ProjectPhase.SPECIFY, spec_approved_at=None, acceptance_passed=False)
+    if replanning:
+        emit(
+            project_id,
+            None,
+            "system",
+            "back to planning: finished tasks are kept; the unfinished ones are replaced "
+            "when a new plan is approved",
+        )
     return {"ok": True}
+
+
+def _require_quiet(p: Project) -> None:
+    """Going back to planning waits for work in flight to settle."""
+    with session() as s:
+        tasks = s.exec(select(Task).where(Task.project_id == p.id)).all()
+    running = [t.key or f"#{t.id}" for t in tasks if t.state in ACTIVE_STATES]
+    if running:
+        raise HTTPException(409, f"{', '.join(running)} is running; wait for it or stop it")
+    merging = [t.key or f"#{t.id}" for t in tasks if t.state == TaskState.AWAITING_MERGE]
+    if merging:
+        raise HTTPException(409, f"{', '.join(merging)} is waiting to be merged; decide first")
+    if p.acceptance_handle:
+        raise HTTPException(409, "the acceptance check is running; wait for it")
+
+
+def _drop_pending_revisions(project_id: int) -> None:
+    """Replanner changes still waiting for approval no longer apply."""
+    with session() as s:
+        revs = s.exec(
+            select(PlanRevision).where(
+                PlanRevision.project_id == project_id,
+                PlanRevision.state == RevisionState.PENDING,
+            )
+        ).all()
+        for rev in revs:
+            rev.state = RevisionState.REJECTED
+            s.add(rev)
+        s.commit()
+    for rev in revs:
+        if rev.gate_id is not None:
+            gates.cancel(rev.gate_id, "back to planning")
 
 
 @router.post("/api/projects/{project_id}/plan/approve")
@@ -293,7 +348,11 @@ def approve_plan(project_id: int) -> dict[str, Any]:
         ).all()
     if not proposed:
         raise HTTPException(400, "there are no proposed tasks")
-    ids = {t.id for t in proposed}
+    with session() as s:
+        finished = s.exec(
+            select(Task).where(Task.project_id == project_id, Task.state == TaskState.DONE)
+        ).all()
+    ids = {t.id for t in proposed} | {t.id for t in finished}
     orphaned = [t.key or str(t.id) for t in proposed if any(d not in ids for d in t.deps)]
     if orphaned:
         raise HTTPException(
@@ -304,6 +363,7 @@ def approve_plan(project_id: int) -> dict[str, Any]:
         raise HTTPException(
             400, f"tasks exceed the size limits: {', '.join(too_big)}; edit or split them"
         )
+    replaced = discard_unfinished(project_id, "replaced by the new plan")
     with session() as s:
         for t in proposed:
             row = s.get(Task, t.id)
@@ -312,7 +372,21 @@ def approve_plan(project_id: int) -> dict[str, Any]:
             row.updated_at = now()
             s.add(row)
         s.commit()
-    _set_phase(p, ProjectPhase.EXECUTE, baseline_tasks=len(proposed))
+    with session() as s:
+        proj = s.get(Project, project_id)
+        assert proj is not None
+        proj.baseline_tasks = len(finished) + len(proposed)
+        s.add(proj)
+        s.commit()
+    if replaced or finished:
+        emit(
+            project_id,
+            None,
+            "system",
+            f"new plan: {len(proposed)} tasks queued, {replaced} unfinished tasks of the "
+            f"earlier plan replaced, {len(finished)} finished tasks kept",
+        )
+        write_tasks_md(p)
     emit(
         project_id,
         None,
@@ -320,4 +394,46 @@ def approve_plan(project_id: int) -> dict[str, Any]:
         f"plan approved: {len(proposed)} tasks queued",
         gate="plan_approval",
     )
-    return {"ok": True, "queued": len(proposed)}
+    phase = environment.start_execution(project_id)
+    return {"ok": True, "queued": len(proposed), "phase": phase.value}
+
+
+# -- environment ------------------------------------------------------------------------
+
+
+@router.post("/api/projects/{project_id}/environment/rebuild")
+def rebuild_environment(project_id: int, body: EnvironmentRebuild) -> dict[str, Any]:
+    """Run the Environment Agent again: after it failed, or when a tool is missing."""
+    p = _project(project_id)
+    if p.phase not in (ProjectPhase.ENVIRONMENT, ProjectPhase.EXECUTE, ProjectPhase.DONE):
+        raise HTTPException(409, f"no environment to build in phase {p.phase.value}")
+    if not environment.docker_available():
+        raise HTTPException(400, "toolchain images need the docker runtime")
+    if not roles.binding(p, roles.ENVIRONMENT):
+        raise HTTPException(400, "no model is set for the Environment Agent")
+    # Planner jobs run one at a time per project, so this waits its turn behind others.
+    with session() as s:
+        waiting = s.exec(
+            select(PlannerJob).where(
+                PlannerJob.project_id == project_id,
+                PlannerJob.kind == JobKind.ENVIRONMENT,
+                col(PlannerJob.state).in_((JobState.QUEUED, JobState.RUNNING)),
+            )
+        ).first()
+    if waiting is not None:
+        raise HTTPException(409, "the Environment Agent is already working on it")
+    job = environment.queue(project_id, body.note.strip())
+    emit(project_id, None, "system", "environment rebuild requested")
+    return {"ok": True, "job": job.model_dump()}
+
+
+@router.post("/api/projects/{project_id}/environment/skip")
+def skip_environment(project_id: int) -> dict[str, Any]:
+    """Start executing without a toolchain image from the Environment Agent."""
+    p = _project(project_id)
+    if p.phase != ProjectPhase.ENVIRONMENT:
+        raise HTTPException(409, f"nothing to skip in phase {p.phase.value}")
+    _require_idle(project_id)
+    _set_phase(p, ProjectPhase.EXECUTE)
+    emit(project_id, None, "system", "environment skipped: tasks run in the current image")
+    return {"ok": True}

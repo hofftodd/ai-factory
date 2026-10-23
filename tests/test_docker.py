@@ -224,9 +224,16 @@ async def test_spec_to_done_with_agent(client, origin, kind):
         }
     ]
 
+    toolchain = (
+        f"<<<FILE .foreman/Dockerfile\nFROM {IMAGE}\nRUN echo ready > /tmp/toolchain\n>>>\n"
+        "<<<FILE .foreman/check.sh\ncat /tmp/toolchain\nbash --version\n>>>\nBash."
+    )
+
     def planner(req):
         if "break the project into small, ordered tasks" in system_text(req):
             return json.dumps(tasks)
+        if "You are the Environment Agent" in system_text(req):
+            return toolchain
         return chat
 
     llm = FakeLLM(planner=planner).start()
@@ -268,6 +275,10 @@ async def test_spec_to_done_with_agent(client, origin, kind):
         with session() as s:
             planned = s.exec(select(Task).where(Task.project_id == pid)).all()
         assert [t.key for t in planned] == ["SETUP", "ACCEPT", "T1", "DOCS"]
+        # The Environment Agent's image is built and checked before any task runs.
+        await drive(orch, lambda: project(pid).phase != ProjectPhase.ENVIRONMENT, timeout=300)
+        assert project(pid).env_commit, "the toolchain image was not prepared"
+        assert (gitops.repo_dir(pid) / ".foreman" / "check.sh").exists()
         await drive(orch, lambda: project(pid).phase == ProjectPhase.DONE, timeout=600)
         assert all(task(t.id).state == TaskState.DONE for t in planned)
         repo = gitops.repo_dir(pid)
@@ -490,3 +501,21 @@ async def test_pi_stuck_in_a_loop_is_stopped_by_the_watchdog(client, origin):
         assert len(llm.requests) < 30  # tripped early, not after a long burn
     finally:
         llm.stop()
+
+
+async def test_environment_check_runs_in_the_image_without_network(tmp_path):
+    """The Environment Agent's image is built for real and check.sh runs inside it."""
+    from foreman import images
+    from foreman.orchestrator.environment import run_check
+
+    env = tmp_path / ".foreman"
+    env.mkdir()
+    (env / "Dockerfile").write_text(f"FROM {IMAGE}\nRUN echo built > /tmp/built\n")
+    (env / "check.sh").write_text("cat /tmp/built\nid -un\n")
+    tag = await images.ensure_image(1, tmp_path)
+    handles: list[str] = []
+    code, out = await run_check(tag, env, handles.append)
+    assert code == 0 and out.split() == ["built", "agent"] and handles
+    (env / "check.sh").write_text("curl -sS --max-time 5 https://example.com\n")
+    code, out = await run_check(tag, env, handles.append)
+    assert code != 0  # no network inside the check

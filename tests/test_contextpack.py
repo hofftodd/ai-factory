@@ -2,6 +2,7 @@ from pathlib import Path
 
 from foreman.core.contextpack import (
     build_pack,
+    build_role_pack,
     extract_interface,
     requirement_slice,
     size_violations,
@@ -83,7 +84,7 @@ def _repo(tmp_path: Path) -> Path:
 
 def test_pack_contents_and_budget(tmp_path):
     repo = _repo(tmp_path)
-    project = Project(name="p", repo_url="x", test_cmd="pytest -q")
+    project = Project(name="p", repo_url="x")
     task = Task(
         project_id=1,
         key="T1",
@@ -124,3 +125,33 @@ def test_size_violations(tmp_path):
     assert "touches 4 files (limit 2)" in v
     assert any("exceeds budget" in x for x in v)
     assert "unknown requirement ids: FR-404" in v
+
+
+def test_setup_pack_has_the_whole_requirements(tmp_path):
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="SETUP", title="Project setup", kind="setup", req_refs=[])
+    for role in ("tester", "builder"):
+        pack = build_role_pack(
+            project,
+            task,
+            repo,
+            role,
+            docs={"requirements": "specs/001-initial/spec.md"},
+            test_paths=["tests"],
+        )
+        assert "## Requirements (the whole project)" in pack.text
+        assert "NFR-1 Responses under 100 ms." in pack.text
+        assert "## Toolchain image" not in pack.text  # no environment prepared yet
+
+
+def test_packs_show_the_toolchain_image(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / ".foreman").mkdir()
+    (repo / ".foreman" / "check.sh").write_text("python3.12 --version\npytest --version\n")
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T1", title="Add", req_refs=[])
+    for role in ("tester", "builder"):
+        pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
+        assert "## Toolchain image" in pack.text and "pytest --version" in pack.text
+        assert "`.foreman/` is read-only to you" in pack.text

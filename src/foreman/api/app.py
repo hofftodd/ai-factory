@@ -31,6 +31,7 @@ from foreman.api.schemas import (
     ProjectCreate,
     ProjectUpdate,
     RetryRequest,
+    SendBackRequest,
     TaskCreate,
     TaskUpdate,
 )
@@ -74,6 +75,7 @@ from foreman.db import control_session, session
 from foreman.executors import EXECUTORS
 from foreman.executors.shell import role_scripts
 from foreman.llm import list_models
+from foreman.orchestrator.gate_actions import send_back_to_tester
 
 
 def require_token(request: Request) -> None:
@@ -336,7 +338,6 @@ async def create_project(body: ProjectCreate) -> Project:
         milestone_branch=body.milestone_branch,
         feature=body.feature,
         phase=ProjectPhase.EXECUTE if body.skip_spec else ProjectPhase.SPECIFY,
-        test_cmd=body.test_cmd,
         executor_kind=body.executor_kind,
         network=body.network,
         role_bindings=bindings,
@@ -522,6 +523,23 @@ def retry_task(task_id: int, body: RetryRequest | None = None) -> Task:
         s.commit()
     _reopen(t.project_id)
     transition(task_id, (t.state,), TaskState.QUEUED, "retry requested")
+    return _get(Task, task_id)
+
+
+@router.post("/api/tasks/{task_id}/send-back")
+def send_back_task(task_id: int, body: SendBackRequest) -> Task:
+    """The task's tests need work: the Tester writes them again, with the note."""
+    t = _get(Task, task_id)
+    if t.state not in (TaskState.FAILED, TaskState.STOPPED_BY_USER, TaskState.PAUSED):
+        raise HTTPException(409, f"cannot send back a task in state {t.state.value}")
+    with session() as s:
+        row = s.get(Task, task_id)
+        assert row is not None
+        row.hold = False
+        s.add(row)
+        s.commit()
+    _reopen(t.project_id)
+    send_back_to_tester(task_id, (t.state,), body.note.strip())
     return _get(Task, task_id)
 
 

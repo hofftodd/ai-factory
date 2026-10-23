@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { control, del, patch, post } from "../api";
 import { ActionButton, ErrorNote, EventLog, Field, StateBadge, StopButton, lines } from "../components";
 import { useEventStream, usePoll } from "../hooks";
-import type { CoveragePoint, Node, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
+import type { CoveragePoint, FEvent, Node, PlannerJob, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
 import CoverageChart from "../CoverageChart";
 import ProgressChart, { type ProgressPoint } from "../ProgressChart";
 import { CaseList, RunSummary } from "./TaskPage";
@@ -132,23 +132,30 @@ function AddTask({ project, tasks, onDone }: { project: Project; tasks: Task[]; 
   );
 }
 
+type BindingForm = { node_id: string; model: string; reasoning_effort: string };
+const REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
+
 function RoleFields({
   label,
   nodes,
   binding,
   onChange,
   listId,
+  hint,
+  withEffort,
 }: {
   label: string;
   nodes: Node[] | null;
-  binding: { node_id: string; model: string };
-  onChange: (b: { node_id: string; model: string }) => void;
+  binding: BindingForm;
+  onChange: (b: BindingForm) => void;
   listId: string;
+  hint?: string;
+  withEffort?: boolean;
 }) {
   const node = nodes?.find((n) => String(n.id) === binding.node_id);
   return (
     <>
-      <Field label={`${label} node`}>
+      <Field label={`${label} node`} hint={hint}>
         <select value={binding.node_id} onChange={(e) => onChange({ ...binding, node_id: e.target.value })}>
           <option value="">— none —</option>
           {nodes?.map((n) => (
@@ -158,8 +165,23 @@ function RoleFields({
           ))}
         </select>
       </Field>
-      <Field label={`${label} model`}>
-        <input list={listId} value={binding.model} onChange={(e) => onChange({ ...binding, model: e.target.value })} />
+      <Field
+        label={withEffort ? `${label} model · reasoning` : `${label} model`}
+        hint={withEffort ? "Reasoning: passed to the model's chat template; default leaves the model's own" : undefined}
+      >
+        <div className="inline">
+          <input list={listId} value={binding.model} onChange={(e) => onChange({ ...binding, model: e.target.value })} />
+          {withEffort && (
+            <select
+              aria-label={`${label} reasoning effort`}
+              value={binding.reasoning_effort}
+              onChange={(e) => onChange({ ...binding, reasoning_effort: e.target.value })}
+            >
+              <option value="">default</option>
+              {REASONING_EFFORTS.map((x) => <option key={x}>{x}</option>)}
+            </select>
+          )}
+        </div>
         <datalist id={listId}>{node?.models.map((m) => <option key={m} value={m} />)}</datalist>
       </Field>
     </>
@@ -170,13 +192,14 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
   const { data: nodes } = usePoll<Node[]>("/api/nodes", 10000);
   // Older projects bound "planner" and "executor": each agent falls back to those.
   const b = (...keys: string[]) => {
-    const x = keys.map((k) => project.role_bindings[k]).find((v) => v?.node_id) ?? { node_id: null, model: "" };
-    return { node_id: x.node_id ? String(x.node_id) : "", model: x.model };
+    const x = keys.map((k) => project.role_bindings[k]).find((v) => v?.node_id) ?? { node_id: null, model: "", reasoning_effort: "" };
+    return { node_id: x.node_id ? String(x.node_id) : "", model: x.model, reasoning_effort: x.reasoning_effort ?? "" };
   };
   const [projectPlanner, setProjectPlanner] = useState(b("project_planner", "planner"));
   const [taskPlanner, setTaskPlanner] = useState(b("task_planner", "planner"));
   const [tester, setTester] = useState(b("tester", "executor"));
   const [builder, setBuilder] = useState(b("builder", "executor"));
+  const [envAgent, setEnvAgent] = useState(b("environment"));
   const [escalation, setEscalation] = useState(b("escalation"));
   const wd = project.watchdog_effective;
   const ge = project.gates_effective ?? {};
@@ -197,7 +220,6 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
   });
   const setWd = (k: string, v: unknown) => setW((x) => ({ ...x, [k]: v }));
   const [f, setF] = useState({
-    test_cmd: project.test_cmd,
     executor_kind: project.executor_kind,
     network: project.network ?? "isolated",
     push_after_merge: project.push_after_merge,
@@ -210,9 +232,10 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
   });
   const [error, setError] = useState("");
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
-  const toBinding = (x: { node_id: string; model: string }) => ({
+  const toBinding = (x: BindingForm) => ({
     node_id: x.node_id ? Number(x.node_id) : null,
     model: x.model,
+    reasoning_effort: x.reasoning_effort,
   });
   // Warn while editing when two agents' models share an ai-swap machine but don't fit together.
   const [swapWarnings, setSwapWarnings] = useState<string[]>([]);
@@ -240,7 +263,6 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         e.preventDefault();
         try {
           await patch(`/api/projects/${project.id}`, {
-            test_cmd: f.test_cmd,
             executor_kind: f.executor_kind,
             network: f.network,
             push_after_merge: f.push_after_merge,
@@ -254,6 +276,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
             role_bindings: {
               project_planner: toBinding(projectPlanner),
               task_planner: toBinding(taskPlanner),
+              environment: toBinding(envAgent),
               tester: toBinding(tester),
               builder: toBinding(builder),
               escalation: toBinding(escalation),
@@ -271,9 +294,10 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
       <div className="grid2">
         <RoleFields label="Project Planner" nodes={nodes} binding={projectPlanner} onChange={setProjectPlanner} listId="pp-models" />
         <RoleFields label="Task Planner" nodes={nodes} binding={taskPlanner} onChange={setTaskPlanner} listId="tp-models" />
-        <RoleFields label="Tester" nodes={nodes} binding={tester} onChange={setTester} listId="tester-models" />
-        <RoleFields label="Builder" nodes={nodes} binding={builder} onChange={setBuilder} listId="builder-models" />
-        <RoleFields label="Escalation" nodes={nodes} binding={escalation} onChange={setEscalation} listId="escalation-models" />
+        <RoleFields label="Environment" nodes={nodes} binding={envAgent} onChange={setEnvAgent} listId="env-models" hint="Empty: uses the Task Planner's model" />
+        <RoleFields label="Tester" nodes={nodes} binding={tester} onChange={setTester} listId="tester-models" withEffort />
+        <RoleFields label="Builder" nodes={nodes} binding={builder} onChange={setBuilder} listId="builder-models" withEffort />
+        <RoleFields label="Escalation" nodes={nodes} binding={escalation} onChange={setEscalation} listId="escalation-models" withEffort />
         <Field label="Coding agent" hint="Runs the Tester and Builder">
           <select value={f.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>
             <option>pi</option>
@@ -312,9 +336,6 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         </Field>
         <Field label="Test paths" hint="Comma-separated. Only the Tester may change files here">
           <input className="mono" value={f.test_paths} onChange={(e) => set("test_paths", e.target.value)} />
-        </Field>
-        <Field label="Test command override" hint="Empty: the Tester's tests/run.sh">
-          <input className="mono" value={f.test_cmd} onChange={(e) => set("test_cmd", e.target.value)} />
         </Field>
       </div>
       <h3>Spend</h3>
@@ -551,10 +572,66 @@ function Revisions({ projectId }: { projectId: number }) {
   );
 }
 
+function EnvironmentPanel({ project, events, onChange }: { project: Project; events: FEvent[]; onChange: () => void }) {
+  const { data: jobs } = usePoll<PlannerJob[]>(`/api/projects/${project.id}/jobs`, 2000);
+  const [note, setNote] = useState("");
+  const job = jobs?.find((j) => j.kind === "environment");
+  const working = !job || job.state === "queued" || job.state === "running";
+  const log = events.filter(
+    (e) =>
+      e.message.startsWith("environment") ||
+      e.kind === "planner" ||
+      (e.kind === "log" && (e.data.step === "image" || e.data.step === "check")),
+  );
+  return (
+    <section className="card">
+      <h2>Preparing the environment</h2>
+      <p className="muted small">
+        The Environment Agent writes the toolchain image every Tester and Builder works in: the language, test framework,
+        coverage and build tools the documents and tasks need. Foreman builds it and runs its check script; tasks start
+        once both pass.
+      </p>
+      {working ? (
+        <p>The Environment Agent is working{job?.model ? ` (${job.model})` : ""}…</p>
+      ) : (
+        <>
+          <div className="error-note">The toolchain image could not be prepared: {job?.error || job?.state}</div>
+          <Field label="Note for the Environment Agent" hint="Optional: what to fix or install">
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+          </Field>
+          <div className="actions">
+            <ActionButton
+              kind="primary"
+              onClick={async () => {
+                await post(`/api/projects/${project.id}/environment/rebuild`, { note });
+                setNote("");
+                onChange();
+              }}
+            >
+              Try again
+            </ActionButton>
+            <ActionButton
+              onClick={async () => {
+                if (!confirm("Start the tasks without a prepared toolchain image? Agents can't install tools themselves.")) return;
+                await post(`/api/projects/${project.id}/environment/skip`);
+                onChange();
+              }}
+            >
+              Skip
+            </ActionButton>
+          </div>
+        </>
+      )}
+      <EventLog events={log} empty="Waiting for the Environment Agent…" />
+    </section>
+  );
+}
+
 const PHASES: { phase: ProjectPhase; label: string }[] = [
   { phase: "specify", label: "1. Specify" },
   { phase: "plan_review", label: "2. Review plan" },
-  { phase: "execute", label: "3. Execute" },
+  { phase: "environment", label: "3. Environment" },
+  { phase: "execute", label: "4. Execute" },
   { phase: "done", label: "✓ Done" },
 ];
 
@@ -584,6 +661,7 @@ export default function ProjectPage() {
   if (!project) return <ErrorNote error={error} />;
   const all = tasks ?? [];
   const active = all.some((t) => t.state === "running" || t.state === "validating");
+  const finished = all.filter((t) => t.state === "done").length;
   const activity = events.filter((e) => e.kind !== "log" && e.kind !== "test");
 
   return (
@@ -606,6 +684,39 @@ export default function ProjectPage() {
             <button className="btn" onClick={() => setPanel(panel === "add" ? "" : "add")}>
               {panel === "add" ? "Cancel" : "Add task"}
             </button>
+          )}
+          {(project.phase === "execute" || project.phase === "done") && (
+            <ActionButton
+              onClick={async () => {
+                const note = prompt(
+                  "Rebuild the toolchain image? The Environment Agent prepares it again; tasks keep running in the current one meanwhile.\n\nWhat's missing or should change (optional):",
+                );
+                if (note === null) return;
+                await post(`/api/projects/${id}/environment/rebuild`, { note });
+                reload();
+              }}
+            >
+              Rebuild environment
+            </ActionButton>
+          )}
+          {(project.phase === "environment" || project.phase === "execute" || project.phase === "done") && (
+            <ActionButton
+              disabled={active}
+              onClick={async () => {
+                if (
+                  !confirm(
+                    "Go back to planning? No new tasks start while you change the documents. " +
+                      "Finished tasks are kept; when you approve the new plan, it replaces the unfinished tasks.",
+                  )
+                )
+                  return;
+                await post(`/api/projects/${id}/spec/reopen`);
+                reload();
+                reloadTasks();
+              }}
+            >
+              Back to planning
+            </ActionButton>
           )}
           <button className="btn" onClick={() => setPanel(panel === "settings" ? "" : "settings")}>
             Settings
@@ -652,8 +763,15 @@ export default function ProjectPage() {
         </>
       )}
 
+      {(project.phase === "specify" || project.phase === "decomposing") && finished > 0 && (
+        <div className="card replan-note small">
+          Back in planning: {finished} finished task{finished === 1 ? " is" : "s are"} kept. When you approve the
+          documents, the Task Planning Agent plans only the remaining work.
+        </div>
+      )}
       {(project.phase === "specify" || project.phase === "decomposing") && <SpecWorkspace project={project} />}
       {project.phase === "plan_review" && <PlanReview project={project} onChange={() => { reload(); reloadTasks(); }} />}
+      {project.phase === "environment" && <EnvironmentPanel project={project} events={events} onChange={reload} />}
       {(project.phase === "execute" || project.phase === "done") && (
       <>
       <Milestone project={project} />
