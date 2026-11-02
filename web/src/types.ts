@@ -41,6 +41,7 @@ export interface Project {
   milestone_branch: string;
   test_cmd: string;
   executor_kind: string;
+  network: "isolated" | "open";
   role_bindings: Record<string, RoleBinding>;
   paused: boolean;
   push_after_merge: boolean;

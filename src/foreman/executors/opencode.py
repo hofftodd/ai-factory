@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from foreman.core.models import Project, Task
-from foreman.executors.base import ExecutorInvocation
+from foreman.executors.base import ExecutorContext, ExecutorInvocation
 
 PROVIDER = "foreman"
 
@@ -39,6 +39,7 @@ def opencode_config(endpoint: str, model: str) -> dict:
 
 class OpenCodeExecutor:
     kind = "opencode"
+    prompt_overhead_tokens = 7500  # measured: ~7.4k (system prompt + 9 tool schemas)
     needs_node = True
 
     def prepare(
@@ -49,6 +50,7 @@ class OpenCodeExecutor:
         model: str,
         ctl_dir: Path,
         prompt: str,
+        context: ExecutorContext | None = None,
     ) -> ExecutorInvocation:
         if not endpoint or not model:
             raise ValueError("opencode executor needs a model endpoint and a model")

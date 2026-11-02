@@ -5,6 +5,8 @@ foreman api           HTTP API and dashboard
 foreman orchestrator  scheduler and task runner
 foreman supervisor    stop / E-stop enforcement
 foreman build-image   build the executor base image
+foreman vm ACTION     macOS: the Lima VM containers run in (start|stop|status|shell|delete)
+foreman doctor        check that this host can run executors
 """
 
 from __future__ import annotations
@@ -73,8 +75,25 @@ def _build_image() -> None:
     root = Path(__file__).resolve().parents[2]
     ctx = root / "docker" / "executor-base"
     tag = get_settings().executor_image
-    sys.exit(subprocess.call(["docker", "build", "-t", tag, str(ctx)]))
+    from foreman.engine import docker_env
 
+    sys.exit(subprocess.call(["docker", "build", "-t", tag, str(ctx)], env=docker_env()))
+
+
+def _vm(args: list[str]) -> None:
+    from foreman.vm import main as vm_main
+
+    vm_main(args)
+
+
+def _doctor(args: list[str]) -> None:
+    from foreman.doctor import main as doctor_main
+
+    doctor_main(args)
+
+
+# Commands that take further arguments.
+ARG_COMMANDS = {"vm": _vm, "doctor": _doctor}
 
 COMMANDS = {
     "up": _up,
@@ -87,8 +106,14 @@ COMMANDS = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="foreman")
-    parser.add_argument("command", choices=sorted(COMMANDS))
+    parser.add_argument("command", choices=sorted([*COMMANDS, *ARG_COMMANDS]))
+    parser.add_argument("args", nargs="*")
     args = parser.parse_args()
+    if args.command in ARG_COMMANDS:
+        ARG_COMMANDS[args.command](args.args)
+        return
+    if args.args:
+        parser.error(f"{args.command} takes no arguments")
     COMMANDS[args.command]()
 
 

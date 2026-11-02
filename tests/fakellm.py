@@ -6,7 +6,8 @@ Speaks two APIs:
 
 Behaviour per chat request:
 - if the conversation already contains a tool result -> reply "Done." and stop;
-- else if a `write` tool is offered (OpenCode) -> call it once to create FILE_PATH;
+- else if a `write` tool is offered (OpenCode, pi) -> call it once to create FILE_PATH,
+  naming the path argument the way that tool's schema does (`filePath` / `path`);
 - else (planner calls, title generation...) -> reply with `planner(request)` if a
   planner function was given, otherwise a short fixed text.
 
@@ -262,11 +263,15 @@ class FakeLLM:
 
     def decide(self, req: dict[str, Any]) -> tuple[dict[str, Any], str]:
         messages = req.get("messages", [])
-        tools = {t.get("function", {}).get("name") for t in req.get("tools") or []}
+        tools = {
+            t.get("function", {}).get("name"): t.get("function", {}) for t in req.get("tools") or []
+        }
         if any(m.get("role") == "tool" for m in messages):
             return {"role": "assistant", "content": "Done."}, "stop"
         if "write" in tools:
-            args = json.dumps({"filePath": FILE_PATH, "content": FILE_CONTENT})
+            props = (tools["write"].get("parameters") or {}).get("properties") or {}
+            key = "path" if "path" in props else "filePath"
+            args = json.dumps({key: FILE_PATH, "content": FILE_CONTENT})
             call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "type": "function",

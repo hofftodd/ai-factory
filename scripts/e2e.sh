@@ -4,10 +4,12 @@
 #
 #   scripts/e2e.sh                  # docker runtime (needs foreman/executor-base)
 #   FOREMAN_RUNTIME=local scripts/e2e.sh
+#   E2E_TMPDIR="$PWD/data" scripts/e2e.sh   # Lima VM: work inside the mounted data dir
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-work="$(mktemp -d)"
+mkdir -p "${E2E_TMPDIR:-${TMPDIR:-/tmp}}"
+work="$(mktemp -d "${E2E_TMPDIR:-${TMPDIR:-/tmp}}/foreman-e2e.XXXXXX")"
 port="${FOREMAN_PORT:-8711}"
 llm_port="${FAKE_LLM_PORT:-8712}"
 trap 'kill "${pid:-0}" "${llm_pid:-0}" 2>/dev/null || true; wait "${pid:-0}" 2>/dev/null || true; rm -rf "$work"' EXIT

@@ -100,7 +100,8 @@ def test_pack_contents_and_budget(tmp_path):
     assert "def add(title: str) -> int:" in pack.text and "return 1" not in pack.text
     assert "Current `src/api.py`" in pack.text and "ROUTES = []" in pack.text
     assert pack.files == ["src/api.py"]
-    assert pack.budget == 32768 * 35 // 100 and not pack.over_budget
+    # The executor's own prompt comes off the window first (pi is the default).
+    assert pack.budget == (32768 - 1500) * 35 // 100 and not pack.over_budget
     assert size_violations(project, task, pack, ["src/api.py"]) == []
 
 

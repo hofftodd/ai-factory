@@ -49,7 +49,7 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
     repo_url: "",
     milestone_branch: "foreman/m1",
     test_cmd: "",
-    executor_kind: "opencode",
+    executor_kind: "pi",
     node_id: "",
     model: "",
     planner_node_id: "",
@@ -171,7 +171,7 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
         </Field>
         <Field label="Executor">
           <select value={form.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>
-            {(sys?.executors ?? ["opencode", "shell"]).map((x) => (
+            {(sys?.executors ?? ["pi", "opencode", "shell"]).map((x) => (
               <option key={x}>{x}</option>
             ))}
           </select>

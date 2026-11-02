@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
+from foreman import engine, sandbox
 from foreman.config import get_settings
 from foreman.core import gates
 from foreman.core.models import (
@@ -157,17 +158,26 @@ class Orchestrator:
     async def ensure_gateway(self) -> None:
         if self.gateway is None:
             self.gateway = Gateway()
+            bind = await asyncio.to_thread(self.gateway_bind_host)
             self.gateway_server, self.gateway_port = await serve(
-                self.gateway, self.settings.gateway_host, self.settings.gateway_port
+                self.gateway, bind, self.settings.gateway_port
             )
-            log.info("model gateway on port %s", self.gateway_port)
+            log.info("model gateway on %s:%s", bind, self.gateway_port)
+
+    def gateway_bind_host(self) -> str:
+        """Where the gateway listens: only where executors arrive (foreman.engine)."""
+        if self.settings.gateway_host != "auto":
+            return self.settings.gateway_host
+        if self.runtime.name != "docker":
+            return "127.0.0.1"
+        return engine.detect().bind_host
 
     @property
     def gateway_url(self) -> str:
         """The gateway as reachable from where executors run."""
         if not self.gateway_port:
             return ""
-        host = "host.docker.internal" if self.runtime.name == "docker" else "127.0.0.1"
+        host = engine.HOST_ALIAS if self.runtime.name == "docker" else "127.0.0.1"
         return f"http://{host}:{self.gateway_port}"
 
     def start_task(self, task: Task, node_id: int | None, model: str) -> bool:
@@ -192,7 +202,9 @@ class Orchestrator:
             run_id = run.id
         assert run_id is not None
         emit(task.project_id, task_id, "system", f"attempt {t.attempts} started", run_id=run_id)
-        runner = TaskRunner(task_id, run_id, self.runtime, self.gateway_url)
+        runner = TaskRunner(
+            task_id, run_id, self.runtime, self.gateway_url, gateway_port=self.gateway_port
+        )
         self.running[task_id] = asyncio.create_task(runner.run())
         return True
 
@@ -256,6 +268,9 @@ class Orchestrator:
             self.gateway_server.should_exit = True
         if self.gateway is not None:
             await self.gateway.aclose()
+        if self.runtime.name == "docker":
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(sandbox.teardown_isolation)
 
     async def run_forever(self) -> None:
         recover()

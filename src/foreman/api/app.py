@@ -244,6 +244,7 @@ async def create_project(body: ProjectCreate) -> Project:
         phase=ProjectPhase.EXECUTE if body.skip_spec else ProjectPhase.SPECIFY,
         test_cmd=body.test_cmd,
         executor_kind=body.executor_kind,
+        network=body.network,
         role_bindings=bindings,
         push_after_merge=body.push_after_merge,
         gates=body.gates,
