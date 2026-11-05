@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 from sqlmodel import col, select
 
-from foreman import gitops
+from foreman import gitops, images, sandbox
 from foreman.config import get_settings
 from foreman.core import gates, watchdog
 from foreman.core.models import (
@@ -32,7 +32,7 @@ from foreman.core.models import (
     Task,
     TaskState,
 )
-from foreman.core.state import emit, estop_active, stop_requested
+from foreman.core.state import emit, estop_active, github_token, stop_requested
 from foreman.db import session
 from foreman.sandbox import Runtime, StepSpec, kill_handle
 
@@ -81,13 +81,38 @@ async def run_acceptance(project_id: int, runtime: Runtime) -> None:
     )
     ctl = get_settings().runs_dir / f"acceptance-{project_id}"
     ctl.mkdir(parents=True, exist_ok=True)
+    image = ""
+    if runtime.name == "docker":
+        try:
+            image = await images.ensure_image(
+                project_id, clone, on_handle=lambda h: _set_handle(project_id, h)
+            )
+        except images.ImageBuildError as e:
+            _set_handle(project_id, "")
+            if estop_active() or stop_requested(project_id, 0, started):
+                emit(project_id, None, "system", "acceptance check stopped")
+                return
+            _record(project_id, head, False)
+            emit(project_id, None, "test", f"acceptance: {e}", step="acceptance", passed=False)
+            _failed(project_id, f"{e}\n{e.output}")
+            return
     spec = StepSpec(
         name=f"foreman-acceptance{project_id}-{int(time.time() * 1000) % 10**8}",
         workspace=clone,
         ctl_dir=ctl,
         command=["bash", "-lc", cmd],
         labels={"foreman.project": str(project_id), "foreman.acceptance": "1"},
+        image=image,
+        network=project.network,
     )
+    if runtime.name == "docker" and project.network != "open":
+        try:
+            await asyncio.to_thread(sandbox.ensure_exec_network)
+        except sandbox.IsolationError as e:
+            _record(project_id, head, False)
+            emit(project_id, None, "test", f"acceptance: {e}", step="acceptance", passed=False)
+            _failed(project_id, str(e))
+            return
     emit(project_id, None, "test", f"acceptance: $ {cmd}", step="acceptance")
     proc = await runtime.start(spec)
     _set_handle(project_id, proc.handle)
@@ -198,7 +223,7 @@ def publish(project_id: int) -> str:
     with session() as s:
         project = s.get(Project, project_id)
         assert project is not None
-    settings = get_settings()
+    token, _ = github_token()
     try:
         gitops.push(project_id, project.repo_url, project.milestone_branch)
         emit(project_id, None, "system", f"pushed {project.milestone_branch}")
@@ -206,12 +231,12 @@ def publish(project_id: int) -> str:
         emit(project_id, None, "system", f"push failed: {e}")
         return ""
     repo = gitops.github_repo(project.repo_url)
-    if repo is None or not settings.github_token:
+    if repo is None or not token:
         emit(
             project_id,
             None,
             "system",
-            "no pull request opened (not a GitHub repository or no FOREMAN_GITHUB_TOKEN)",
+            "no pull request opened (not a GitHub repository or no GitHub token)",
         )
         return ""
     owner, name = repo
@@ -228,7 +253,7 @@ def publish(project_id: int) -> str:
             json=body,
             timeout=30,
             headers={
-                "Authorization": f"Bearer {settings.github_token}",
+                "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
             },
         )

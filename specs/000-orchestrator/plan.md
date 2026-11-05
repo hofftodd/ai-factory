@@ -129,11 +129,13 @@ and default role bindings.
 - Configurable gates + "Needs you" inbox + ntfy notifications.
 - Milestone PRs on GitHub.
 
-### M4 — Multi-node & polish
+### M4 — Hosts, pi, egress (part 1 ✅, see §11); multi-node & polish
+- macOS hosting next to Linux (Lima VM), pi executor (default), executor
+  network locked to the gateway. ✅
 - Multi-node scheduling with capacities, node health view.
 - Cloud spend tracking and caps.
 - Portfolio dashboard, validation trend charts.
-- Aider executor; crash-recovery hardening.
+- Crash-recovery hardening.
 
 ## 7. Risks
 
@@ -192,9 +194,12 @@ Design changes made while building M1 (spec updated where relevant):
 - The node's API key (if any) is written into the OpenCode config inside the
   run's read-only control mount; cloud keys must go through a host-side proxy
   before cloud executors are allowed (NFR-5).
-- Per-project toolchain images (`.foreman/Dockerfile`) are not built yet; the
-  base image only has git + OpenCode, so validation commands that need a
-  language runtime require a custom `FOREMAN_EXECUTOR_IMAGE` for now.
+- Per-project toolchain images: before a task attempt or acceptance check, the
+  orchestrator builds `.foreman/Dockerfile` (context: `.foreman/` only) into
+  `foreman/project-<instance>-<id>:<hash of Dockerfile + base image id>` and runs
+  that step's containers from it; unchanged Dockerfiles reuse the image. A failed
+  build is a `config` failure (blocks at once). Builds are killable by Stop like
+  containers (`local:<pgid>` handle). Old images are not pruned yet.
 - No GitHub PR creation yet (milestone branch is merged locally and optionally
   pushed).
 
@@ -245,13 +250,11 @@ Design changes made while building M1 (spec updated where relevant):
 | V3.2 over-budget tasks are split, never queued | ✅ retry loop + approval block (`test_oversized_task_is_sent_back_to_be_split`, `test_persistent_violations_block_plan_approval`) |
 | V3.3 acyclic graph | ✅ cycle detection before tasks are created |
 | V8.5 in-flight planner stream aborted on Stop | ✅ `test_stop_aborts_planner_mid_stream_and_applies_nothing` |
-| E2E-1 spec → done with a real executor | ✅ `test_spec_to_done_with_opencode` (Docker, OpenCode, fake model) and Playwright `web/e2e/spec.spec.ts` |
+| E2E-1 spec → done with a real executor | ✅ `test_spec_to_done_with_agent[pi|opencode]` (Docker, pi and OpenCode, fake model) and Playwright `web/e2e/spec.spec.ts` |
 
 ### Known gaps carried into M3+
 
 - Network egress restriction for executor containers (FR-4.6) — still open.
-- Per-project toolchain images: the planner can write `.foreman/Dockerfile`,
-  but foreman doesn't build or use it yet.
 - Planner jobs don't count against node capacity.
 - Token counts are estimates (chars/4), not tokenizer-exact.
 - Watchdog, replanning after each task, and the remaining checkpoints are M3.
@@ -316,9 +319,71 @@ Design changes made while building M1 (spec updated where relevant):
 
 - Container network egress restriction (FR-4.6): executors now only *need*
   the gateway, so the next step is a Docker network that allows nothing else.
-- Per-project toolchain images (`.foreman/Dockerfile`) are written by the
-  planner but not yet built or used.
 - Planner jobs don't count against node capacity; the gateway enforces
   budgets but not node-level concurrency.
 - Token counts fall back to estimates when a server doesn't report usage.
 - Regression detection is exit-code based.
+
+## 11. M4 part 1 implementation notes: macOS hosts, pi, egress
+
+**Hosts.** Foreman's processes run natively on Linux and macOS; containers run
+on whatever Docker engine `DOCKER_HOST` names. `foreman.engine` resolves the
+socket (`FOREMAN_DOCKER_HOST`, `DOCKER_HOST`, the managed Lima VM's socket,
+the CLI default) and how containers reach the host: executors always use the
+name `host.docker.internal`, mapped with `--add-host` to `host-gateway` (Linux,
+Docker Desktop, OrbStack) or `192.168.5.2` (Lima, colima: on Lima
+`host-gateway` is the VM). The gateway binds only where containers arrive:
+the docker bridge address on Linux, loopback on macOS (`FOREMAN_GATEWAY_HOST`
+overrides; it used to be `0.0.0.0`). Every docker call, including the
+supervisor's kills, uses the resolved socket.
+
+**Lima VM** (`foreman vm start|stop|status|shell|delete`, `foreman.vm`): Lima's
+`docker-rootful` template, `vz` + virtiofs, mounting only `FOREMAN_DATA_DIR`,
+writable, at the same path (bind mounts resolve inside the VM). Rootful so
+containers write the task clone as the user's own uid. `foreman doctor` runs
+the real paths: engine, image, a container writing to the data dir, a
+container reaching the gateway address, and the isolated network.
+
+**Process groups on Darwin.** `group_alive` now asks `ps` where there is no
+`/proc`, and treats `EPERM` from `killpg` as dead: Darwin returns it for a
+group that holds only zombies, which made Stop and timeouts crash on macOS.
+
+**Egress (FR-4.6).** Each instance has an internal network
+`foreman-exec-<instance>` and a relay container `foreman-gw-<instance>` (socat,
+read-only, no capabilities) on that network and the default bridge,
+forwarding one port to the gateway. Executors, validation and acceptance run
+on the internal network and reach the gateway as `http://foreman-gw:8701`;
+nothing else resolves or routes. The relay carries no `foreman.run` label, so
+Stop and the orphan sweep leave it alone; it is recreated when the gateway
+port changes and removed when the orchestrator exits. `Project.network`
+("isolated" default, "open") is the per-project escape hatch. Existing
+projects become isolated on upgrade.
+
+**pi executor.** `foreman.executors.pi`: a generated `models.json` registers
+the gateway as provider `foreman` (`openai-completions`, dummy key, the
+node's context window); pi runs with `--mode json --no-session --offline`
+and every discovery feature off, including `AGENTS.md` (the context pack is
+the agent's whole context). pi exits 0 when model calls fail, so executors
+can now return an `OutputParser` that renders their raw output for the
+dashboard (raw JSONL stays in `execute.log`) and reports a failure after a 0
+exit. Executors declare `prompt_overhead_tokens`, measured from the first
+request each agent sends: pi ~1.4k (4 tools), OpenCode ~7.4k (9 tools); the
+context budget is now `pct × (window − overhead)`.
+
+### Validation coverage after M4 part 1
+
+| Check | Status |
+|---|---|
+| Full suite on macOS (Darwin process groups) | ✅ 8 previously failing stop/timeout tests pass; `tests/test_stop.py` uses `sandbox.alive_in_group` |
+| Engine detection and overrides | ✅ `tests/test_engine.py` |
+| Isolated network reaches only the gateway | ✅ `test_isolated_network_reaches_only_the_gateway` (host, IP and DNS targets unreachable; "open" unchanged) |
+| pi end to end | ✅ `test_executor_against_fake_model[pi]`, `test_spec_to_done_with_agent[pi]` (through the relay) |
+| pi loop tripped by the gateway | ✅ `test_pi_stuck_in_a_loop_is_stopped_by_the_watchdog` |
+| pi adapter and budgets | ✅ `tests/test_executors.py` |
+| Lima VM end to end | manual on a Mac: `foreman vm start && foreman doctor` (hosted macOS CI runners cannot run VMs) |
+
+### Known gaps
+
+- Hosted CI covers macOS without Docker only; Docker/Lima on a Mac is a manual check.
+- The relay forwards to the gateway port only; package registries during
+  agent runs need the "open" network (a registry allowlist is possible later).

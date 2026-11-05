@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { del, post } from "../api";
+import { del, patch, post } from "../api";
 import { ActionButton, ErrorNote, Field, fmtTime } from "../components";
 import { usePoll } from "../hooks";
 import type { Node } from "../types";
@@ -38,6 +38,7 @@ export default function NodesPage() {
             </div>
             <div className="small">{n.models.length ? n.models.join(", ") : <span className="muted">no models listed</span>}</div>
             <ErrorNote error={checkErrors[n.id] ?? ""} />
+            <CapacityEditor node={n} onSaved={reload} />
             <div className="actions">
               <ActionButton
                 onClick={async () => {
@@ -108,5 +109,36 @@ export default function NodesPage() {
         <button className="btn primary">Add node</button>
       </form>
     </div>
+  );
+}
+
+// Edits a node's capacity in place. The scheduler re-reads nodes every tick, so a change
+// applies to the next task it starts; lowering it never stops tasks already running.
+function CapacityEditor({ node, onSaved }: { node: Node; onSaved: () => void }) {
+  const [value, setValue] = useState(node.capacity);
+  const [error, setError] = useState("");
+  return (
+    <form
+      className="row"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError("");
+        try {
+          await patch(`/api/nodes/${node.id}`, { capacity: value });
+          onSaved();
+        } catch (err) {
+          setError((err as Error).message);
+        }
+      }}
+    >
+      <label className="small muted">
+        Capacity{" "}
+        <input type="number" min={1} max={64} value={value} onChange={(e) => setValue(Number(e.target.value))} style={{ width: 64 }} />
+      </label>
+      <button className="btn" disabled={value === node.capacity}>
+        Save
+      </button>
+      <ErrorNote error={error} />
+    </form>
   );
 }

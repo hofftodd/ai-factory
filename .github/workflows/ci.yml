@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Hosted macOS runners can't run a Docker VM, so the Docker tests skip
+        # themselves there; run them on a Mac with `foreman vm start`.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run mypy src
+      - name: Build the dashboard
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Build the executor image
+        if: runner.os == 'Linux'
+        run: uv run foreman build-image
+      - name: Check the host
+        if: runner.os == 'Linux'
+        run: uv run foreman doctor
+      - run: uv run pytest -q
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync
+      - working-directory: web
+        run: npm ci && npx playwright install --with-deps chromium
+      - run: uv run foreman build-image
+      - run: scripts/e2e.sh

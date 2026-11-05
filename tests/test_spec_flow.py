@@ -12,6 +12,7 @@ from sqlmodel import col, select
 
 from foreman import gitops
 from foreman.core.models import (
+    Event,
     JobState,
     PlannerJob,
     ProjectPhase,
@@ -466,3 +467,29 @@ async def test_runs_to_done_without_any_input_when_optional_gates_are_off(client
         reviews = s.exec(select(PlanRevision).where(PlanRevision.project_id == pid)).all()
     assert len(reviews) == 3  # one after each task
     assert project(pid).acceptance_passed and project(pid).baseline_tasks == 3
+
+
+async def test_thinking_model_streams_reasoning_and_gets_room_to_think(client, origin, llm):
+    llm.reasoning = "Let me think about the greeter. " * 40
+    p = spec_project(client, origin, llm)
+    await chat(client, Orchestrator(), p["id"], "Build a greeter.")
+    assert job_states(p["id"]) == [JobState.DONE]
+    reply = client.get(f"/api/projects/{p['id']}/spec").json()["messages"][1]["content"]
+    assert "Let me think" not in reply  # reasoning is never part of the reply
+    with session() as s:
+        thinking = s.exec(select(Event).where(Event.kind == "planner_thinking")).all()
+    assert "".join(e.message for e in thinking) == llm.reasoning
+    # The output budget is what the 32k context leaves, not a fixed 16k.
+    assert 16000 < llm.requests[-1]["max_tokens"] < 32768
+
+
+async def test_planner_cut_off_while_thinking_says_so(client, origin, llm):
+    llm.reasoning = "Hmm. " * 20
+    llm.planner = lambda req: ""
+    llm.finish = "length"
+    p = spec_project(client, origin, llm)
+    await chat(client, Orchestrator(), p["id"], "Build a greeter.")
+    with session() as s:
+        job = s.exec(select(PlannerJob).where(PlannerJob.project_id == p["id"])).one()
+    assert job.state == JobState.FAILED
+    assert "output budget thinking without answering" in job.error

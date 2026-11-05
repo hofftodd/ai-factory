@@ -186,6 +186,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
   const [f, setF] = useState({
     test_cmd: project.test_cmd,
     executor_kind: project.executor_kind,
+    network: project.network ?? "isolated",
     push_after_merge: project.push_after_merge,
     max_task_files: project.max_task_files,
     context_budget_pct: project.context_budget_pct,
@@ -206,6 +207,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
           await patch(`/api/projects/${project.id}`, {
             test_cmd: f.test_cmd,
             executor_kind: f.executor_kind,
+            network: f.network,
             push_after_merge: f.push_after_merge,
             max_task_files: f.max_task_files,
             context_budget_pct: f.context_budget_pct,
@@ -232,8 +234,15 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <RoleFields label="Escalation" nodes={nodes} binding={escalation} onChange={setEscalation} listId="escalation-models" allowCloud={false} />
         <Field label="Executor">
           <select value={f.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>
+            <option>pi</option>
             <option>opencode</option>
             <option>shell</option>
+          </select>
+        </Field>
+        <Field label="Executor network" hint="Isolated: agents reach only their model, through the gateway">
+          <select value={f.network} onChange={(e) => set("network", e.target.value)}>
+            <option value="isolated">isolated</option>
+            <option value="open">open (LAN and internet)</option>
           </select>
         </Field>
       </div>

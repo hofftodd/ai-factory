@@ -20,7 +20,8 @@ class ProjectCreate(BaseModel):
     # Skip Phase 1 and go straight to manually added tasks.
     skip_spec: bool = False
     test_cmd: str = ""
-    executor_kind: str = "opencode"
+    executor_kind: str = "pi"
+    network: Literal["isolated", "open"] = "isolated"
     role_bindings: dict[str, RoleBinding] = Field(default_factory=dict)
     push_after_merge: bool = False
     gates: dict[str, Any] = Field(default_factory=dict)
@@ -34,6 +35,7 @@ class ProjectUpdate(BaseModel):
     context_budget_pct: int | None = Field(default=None, ge=5, le=90)
     test_cmd: str | None = None
     executor_kind: str | None = None
+    network: Literal["isolated", "open"] | None = None
     role_bindings: dict[str, RoleBinding] | None = None
     gates: dict[str, Any] | None = None
     watchdog: dict[str, Any] | None = None
@@ -78,6 +80,21 @@ class NodeCreate(BaseModel):
     api_key: str = ""
     capacity: int = Field(default=1, ge=1, le=64)
     models: list[str] = Field(default_factory=list)
+
+
+class NodeUpdate(BaseModel):
+    capacity: int | None = Field(default=None, ge=1, le=64)
+
+
+class GitHubRepoCreate(BaseModel):
+    owner: str = Field(min_length=1, pattern=r"^[A-Za-z0-9-]+$")
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    private: bool = True
+    description: str = ""
+
+
+class GitHubTokenUpdate(BaseModel):
+    token: str = Field(min_length=1)
 
 
 class ControlRequest(BaseModel):

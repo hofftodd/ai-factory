@@ -35,9 +35,20 @@ class Settings:
     ntfy_url: str = field(default_factory=lambda: _env("NTFY_URL", ""))
     # Where the dashboard is reachable, for links in notifications.
     public_url: str = field(default_factory=lambda: _env("PUBLIC_URL", ""))
-    # Model gateway: executors reach their model through the orchestrator.
-    gateway_host: str = field(default_factory=lambda: _env("GATEWAY_HOST", "0.0.0.0"))
+    # Model gateway: executors reach their model through the orchestrator. "auto" binds
+    # where containers arrive (docker bridge on Linux, loopback on macOS); see
+    # foreman.engine.
+    gateway_host: str = field(default_factory=lambda: _env("GATEWAY_HOST", "auto"))
     gateway_port: int = field(default_factory=lambda: int(_env("GATEWAY_PORT", "8701")))
+    # Docker socket for every docker command. Empty: DOCKER_HOST, else the managed
+    # Lima VM's socket if it exists, else the docker CLI's default context.
+    docker_host: str = field(default_factory=lambda: _env("DOCKER_HOST", ""))
+    # What `host.docker.internal` maps to inside containers ("auto": host-gateway, or
+    # Lima's host address on Lima).
+    container_host_ip: str = field(default_factory=lambda: _env("CONTAINER_HOST_IP", "auto"))
+    # Managed Lima VM size (macOS); 0 = derived from this machine.
+    vm_cpus: int = field(default_factory=lambda: int(_env("VM_CPUS", "0")))
+    vm_memory_gib: int = field(default_factory=lambda: int(_env("VM_MEMORY_GIB", "0")))
 
     @property
     def db_path(self) -> Path:

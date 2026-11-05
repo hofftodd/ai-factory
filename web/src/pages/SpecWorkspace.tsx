@@ -11,25 +11,87 @@ const DOCS: { name: DocName; label: string }[] = [
   { name: "tasks", label: "Tasks" },
 ];
 
-/** Live planner output for the active job, assembled from streamed events. */
+/** Live planner output for the active job, assembled from streamed events: the reply,
+ * and the reasoning a thinking model streams before (or while) it writes one. */
 function usePlannerStream(projectId: number, jobId: number | undefined) {
   const { events } = useEventStream({ project_id: projectId });
   return useMemo(() => {
-    if (jobId === undefined) return "";
-    return events
-      .filter((e) => e.kind === "planner" && e.data.job_id === jobId)
-      .map((e) => e.message)
-      .join("");
+    const out = { text: "", thinking: "" };
+    if (jobId === undefined) return out;
+    for (const e of events) {
+      if (e.data.job_id !== jobId) continue;
+      if (e.kind === "planner") out.text += e.message;
+      else if (e.kind === "planner_thinking") out.thinking += e.message;
+    }
+    return out;
   }, [events, jobId]);
 }
 
-/** Hide <<<FILE ...>>> bodies while streaming; show which file is being written. */
+// How much of the reasoning to show while it streams: the latest part is the useful one.
+const THINKING_TAIL = 1200;
+
+function Thinking({ text, answering }: { text: string; answering: boolean }) {
+  if (!text) return null;
+  const words = text.trim().split(/\s+/).length;
+  if (!answering) {
+    return (
+      <div className="thinking">
+        <div className="msg-meta">Thinking… ({words.toLocaleString()} words so far)</div>
+        <div className="thinking-body">{text.length > THINKING_TAIL ? "…" + text.slice(-THINKING_TAIL) : text}</div>
+      </div>
+    );
+  }
+  return (
+    <details className="thinking">
+      <summary className="msg-meta">Thought for {words.toLocaleString()} words</summary>
+      <div className="thinking-body">{text}</div>
+    </details>
+  );
+}
+
+/** Hide <<<FILE ...>>> bodies while streaming; show which file is being written. Mirrors
+ * the server's lenient parser: the path may be on the next line, and a block may end at
+ * the next <<<FILE / <<<ACCEPTANCE_CMD instead of >>>. */
 function summarizeStream(text: string): string {
-  return text
-    .replace(/<<<FILE[ \t]+([^\n]+)\n[\s\S]*?(\n?>>>|$)/g, (_m, path: string, end: string) =>
-      end ? `[wrote ${path.trim()}]` : `[writing ${path.trim()}…]`,
-    )
-    .replace(/<<<ACCEPTANCE_CMD\n([\s\S]*?)(\n?>>>|$)/g, (_m, cmd: string) => `[acceptance command: ${cmd.trim()}]`);
+  const out: string[] = [];
+  const lines = text.split("\n");
+  let open: { kind: "file" | "cmd"; label: string; body: string[] } | null = null;
+  const close = (done: boolean) => {
+    if (!open) return;
+    out.push(
+      open.kind === "file"
+        ? done
+          ? `[wrote ${open.label}]`
+          : `[writing ${open.label}…]`
+        : `[acceptance command: ${open.body.join(" ").trim()}]`,
+    );
+    open = null;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const file = /^<<<FILE(?:[ \t]+(.*?))?[ \t]*$/.exec(line);
+    if (file) {
+      close(true);
+      let path = (file[1] ?? "").trim();
+      const next = (lines[i + 1] ?? "").trim();
+      if (!path && next && !/\s/.test(next)) {
+        path = next;
+        i++;
+      }
+      if (path) open = { kind: "file", label: path, body: [] };
+    } else if (/^<<<ACCEPTANCE_CMD[ \t]*$/.test(line)) {
+      close(true);
+      open = { kind: "cmd", label: "", body: [] };
+    } else if (open && line.trim() === ">>>") {
+      close(true);
+    } else if (open) {
+      open.body.push(line);
+    } else {
+      out.push(line);
+    }
+  }
+  close(false);
+  return out.join("\n");
 }
 
 function Chat({ spec, project, reload }: { spec: SpecState; project: Project; reload: () => void }) {
@@ -42,7 +104,7 @@ function Chat({ spec, project, reload }: { spec: SpecState; project: Project; re
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [spec.messages.length, streaming.length]);
+  }, [spec.messages.length, streaming.text.length, streaming.thinking.length]);
 
   async function send() {
     if (!text.trim()) return;
@@ -87,7 +149,10 @@ function Chat({ spec, project, reload }: { spec: SpecState; project: Project; re
         {active && (
           <div className="msg msg-assistant streaming">
             <div className="msg-meta">Planner · {active.model || "…"}</div>
-            <div className="msg-body">{summarizeStream(streaming) || "…"}</div>
+            <Thinking text={streaming.thinking} answering={!!streaming.text} />
+            {(streaming.text || !streaming.thinking) && (
+              <div className="msg-body">{summarizeStream(streaming.text) || "…"}</div>
+            )}
           </div>
         )}
         <div ref={bottom} />

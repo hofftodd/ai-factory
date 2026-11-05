@@ -41,6 +41,7 @@ export interface Project {
   milestone_branch: string;
   test_cmd: string;
   executor_kind: string;
+  network: "isolated" | "open";
   role_bindings: Record<string, RoleBinding>;
   paused: boolean;
   push_after_merge: boolean;
@@ -128,6 +129,7 @@ export interface FEvent {
     | "system"
     | "gate"
     | "planner"
+    | "planner_thinking"
     | "planner_start"
     | "planner_end"
     | "watchdog"
@@ -135,6 +137,16 @@ export interface FEvent {
   message: string;
   data: Record<string, unknown>;
   ts: number;
+}
+
+export interface GitHubTokenStatus {
+  configured: boolean;
+  source: "dashboard" | "environment" | "";
+  hint: string;
+  ok?: boolean;
+  login?: string;
+  scopes?: string | null;
+  error?: string;
 }
 
 export interface SystemInfo {

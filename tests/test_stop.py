@@ -12,13 +12,13 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 
 import pytest
 from sqlmodel import col, select
 
 from foreman.core.models import RunState, TaskRun, TaskState
 from foreman.db import session
+from foreman.sandbox import alive_in_group
 from tests.helpers import make_project, make_task, task, wait_for
 
 LONG = "sleep 300 & sleep 300 & wait"
@@ -65,17 +65,7 @@ class _suppress:
 
 def _alive_in_group(pgid: int) -> list[int]:
     """Non-zombie processes in a process group."""
-    alive = []
-    for d in Path("/proc").iterdir():
-        if not d.name.isdigit():
-            continue
-        try:
-            fields = (d / "stat").read_text().rsplit(")", 1)[1].split()
-        except OSError:
-            continue
-        if int(fields[2]) == pgid and fields[0] != "Z":
-            alive.append(int(d.name))
-    return alive
+    return alive_in_group(pgid)
 
 
 def _open_run(task_id: int) -> TaskRun:

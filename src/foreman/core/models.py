@@ -98,7 +98,10 @@ class Project(SQLModel, table=True):
     milestone_branch: str = "foreman/m1"
     # Project-wide test command run after every task (regression guard). Optional.
     test_cmd: str = ""
-    executor_kind: str = "opencode"
+    executor_kind: str = "pi"
+    # Executor network: "isolated" (only the model gateway is reachable) or "open"
+    # (LAN and internet, for tests that need them). See foreman.sandbox.
+    network: str = "isolated"
     # role -> {"node_id": int, "model": str}. Roles: "executor", "planner".
     role_bindings: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # Optional checkpoints, e.g. {"plan_approval": true}. See core/gates.py.
@@ -245,6 +248,14 @@ class Control(SQLModel, table=True):
 
 class SystemFlag(SQLModel, table=True):
     """Global flags (E-stop). Lives in control.db."""
+
+    key: str = Field(primary_key=True)
+    value: str = ""
+    updated_at: float = Field(default_factory=now)
+
+
+class AppSetting(SQLModel, table=True):
+    """Global settings edited from the dashboard (e.g. the GitHub token). Lives in foreman.db."""
 
     key: str = Field(primary_key=True)
     value: str = ""

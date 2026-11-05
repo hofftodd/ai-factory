@@ -3,6 +3,8 @@ import pytest
 from foreman.core.models import Project
 from foreman.planner import (
     PlanError,
+    chat_stage,
+    chat_system_prompt,
     find_cycle,
     parse_chat,
     parse_tasks,
@@ -121,3 +123,70 @@ def test_render_tasks_md():
     )
     assert "## T1: Store" in md and "`src/store.py`" in md and "- [ ] x" in md
     assert "> Size check: too big" in md
+
+
+DOCS = {"spec": "- FR-1 x", "plan": "p", "validation": "- AC-1 (FR-1)"}
+
+
+def test_chat_stage_moves_from_design_to_tests_to_review():
+    assert chat_stage({}, []) == "design"
+    assert chat_stage({**DOCS, "validation": " "}, ["README.md"]) == "design"
+    assert chat_stage(DOCS, ["README.md"]) == "tests"
+    assert chat_stage(DOCS, ["README.md", "tests/acceptance/test_x.py"]) == "review"
+
+
+def test_chat_prompt_holds_tests_back_until_the_design_is_reviewed():
+    design = chat_system_prompt(P, {}, [], "")
+    assert "Current step: DESIGN." in design and "Do not write acceptance tests" in design
+    tests = chat_system_prompt(P, DOCS, [], "")
+    assert "Current step: DESIGN REVIEW." in tests and "write the acceptance tests" in tests
+    for prompt in (design, tests):
+        assert "contain no implementation code" in prompt
+        assert "no language runtimes" in prompt and "USER root" in prompt
+
+
+def test_parse_chat_accepts_separator_style_blocks():
+    # How Qwen wrote them: path on the next line, each <<<FILE ends the previous file,
+    # and a bare <<<FILE before prose only terminates.
+    text = """Here you go.
+<<<FILE specs/001-initial/spec.md
+# Spec
+<<<FILE
+specs/001-initial/plan.md
+# Plan
+<<<FILE
+
+The tests fail for now.
+
+<<<ACCEPTANCE_CMD
+node --test
+>>>
+Done."""
+    out = parse_chat(P, text)
+    assert out.files == {
+        "specs/001-initial/spec.md": "# Spec",
+        "specs/001-initial/plan.md": "# Plan",
+    }
+    assert out.acceptance_cmd == "node --test"
+    assert out.message.splitlines() == [
+        "Here you go.",
+        "[wrote specs/001-initial/spec.md]",
+        "[wrote specs/001-initial/plan.md]",
+        "",
+        "The tests fail for now.",
+        "",
+        "[acceptance command: node --test]",
+        "Done.",
+    ]
+
+
+def test_parse_chat_does_not_apply_a_cut_off_file():
+    out = parse_chat(P, "Writing.\n<<<FILE specs/001-initial/spec.md\n# Spe")
+    assert out.files == {}
+    assert out.message.endswith("[incomplete file specs/001-initial/spec.md: not written]")
+
+
+def test_parse_chat_bare_terminator_before_prose_is_not_a_path():
+    out = parse_chat(P, "<<<FILE specs/001-initial/spec.md\n# S\n<<<FILE\nAll done here.")
+    assert out.files == {"specs/001-initial/spec.md": "# S"}
+    assert out.message.endswith("All done here.")
