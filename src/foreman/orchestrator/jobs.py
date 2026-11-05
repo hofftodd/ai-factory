@@ -95,9 +95,7 @@ def planner_note(project_id: int, text: str, job_id: int | None = None) -> None:
 
 def read_docs(project: Project) -> dict[str, str]:
     assert project.id is not None
-    return {
-        name: gitops.read_repo_file(project.id, doc_path(project, name)) for name in DOC_NAMES
-    }
+    return {name: gitops.read_repo_file(project.id, doc_path(project, name)) for name in DOC_NAMES}
 
 
 def job_role(kind: JobKind) -> str:

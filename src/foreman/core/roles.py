@@ -145,8 +145,16 @@ def planner_may_write(project: Project, rel: str, exists: Any = None) -> bool:
 
 # Test files that can live next to code, outside the test directories.
 TEST_FILE_PATTERNS = (
-    "test_*.py", "*_test.py", "*_test.go", "*.test.ts", "*.test.tsx", "*.test.js",
-    "*.spec.ts", "*.spec.js", "*_spec.rb", "*Test.java",
+    "test_*.py",
+    "*_test.py",
+    "*_test.go",
+    "*.test.ts",
+    "*.test.tsx",
+    "*.test.js",
+    "*.spec.ts",
+    "*.spec.js",
+    "*_spec.rb",
+    "*Test.java",
 )
 
 

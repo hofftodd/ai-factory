@@ -78,7 +78,10 @@ def test_copy_sources():
         'ADD ["setup.cfg", "/app/"]\n'
     )
     assert images.copy_sources(text) == [
-        "requirements.txt", "pyproject.toml", "uv.lock", "setup.cfg"
+        "requirements.txt",
+        "pyproject.toml",
+        "uv.lock",
+        "setup.cfg",
     ]
 
 

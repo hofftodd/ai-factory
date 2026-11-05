@@ -100,9 +100,11 @@ class Project(SQLModel, table=True):
     milestone_branch: str = "foreman/m1"
     # Project-wide test command run after every task (regression guard). Optional.
     test_cmd: str = ""
-    executor_kind: str = "opencode"
-    # Executor containers' network: "gateway" (only the model gateway) or "open".
-    network: str = "gateway"
+    executor_kind: str = "pi"
+    # Executor network: "isolated" (only the model gateway is reachable) or "open"
+    # (LAN and internet, for tests that need them). See foreman.sandbox. Older rows
+    # may say "gateway", the earlier name for "isolated".
+    network: str = "isolated"
     # role -> {"node_id": int, "model": str}. Roles: see core/roles.py (project_planner,
     # task_planner, tester, builder, escalation; older projects: planner, executor).
     role_bindings: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))

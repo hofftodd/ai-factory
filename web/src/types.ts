@@ -41,10 +41,10 @@ export interface Project {
   milestone_branch: string;
   test_cmd: string;
   executor_kind: string;
+  network: "isolated" | "open";
   role_bindings: Record<string, RoleBinding>;
   paused: boolean;
   push_after_merge: boolean;
-  network: "gateway" | "open";
   spend_usd: number;
   spend_cap_usd: number;
   min_task_coverage: number;

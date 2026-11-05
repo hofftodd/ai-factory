@@ -15,6 +15,7 @@ import time
 import pytest
 
 from foreman.core.models import TaskState
+from foreman.engine import docker
 from foreman.orchestrator.main import Orchestrator
 from foreman.sandbox import running_containers
 from tests.helpers import TERMINAL, drive, make_project, make_task, task, wait_for
@@ -25,8 +26,8 @@ IMAGE = os.environ.get("FOREMAN_TEST_IMAGE", "foreman/executor-base:latest")
 def _docker_ready() -> bool:
     if not shutil.which("docker"):
         return False
-    r = subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True)
-    return r.returncode == 0
+    # The same engine Foreman uses (e.g. the Lima VM on macOS), not just the CLI default.
+    return docker("image", "inspect", IMAGE).returncode == 0
 
 
 pytestmark = [
@@ -43,13 +44,19 @@ def docker_runtime(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-must-not-leak")
     yield
     from foreman.config import get_settings
-    from foreman.sandbox import remove_egress_lockdown
+    from foreman.sandbox import teardown_isolation
 
-    remove_egress_lockdown()
+    teardown_isolation()  # each test's data dir is its own instance
     images = subprocess.run(
-        ["docker", "images", "-q", "--filter",
-         f"reference=foreman/project-{get_settings().instance_id}-*"],
-        capture_output=True, text=True,
+        [
+            "docker",
+            "images",
+            "-q",
+            "--filter",
+            f"reference=foreman/project-{get_settings().instance_id}-*",
+        ],
+        capture_output=True,
+        text=True,
     ).stdout.split()
     if images:
         subprocess.run(["docker", "rmi", "-f", *images], capture_output=True)
@@ -74,7 +81,7 @@ async def test_task_runs_in_isolated_container(client, origin, env):
 
     repo = gitops.repo_dir(p["id"])
     assert (repo / "src" / "app.py").read_text() == "VALUE = 42\n"
-    assert (repo / "probe_uid").read_text().strip() == "1000"  # never root
+    assert (repo / "probe_uid").read_text().strip() not in ("", "0")  # never root
     assert (repo / "probe_pwd").read_text().strip() == "/workspace"
     env_dump = (repo / "probe_env").read_text()
     assert "must_not_leak" not in env_dump and "must-not-leak" not in env_dump  # NFR-5
@@ -119,10 +126,13 @@ def test_stop_kills_container_within_10s(client, origin):
             proc.wait(10)
 
 
-@pytest.mark.parametrize("provider", ["openai", "anthropic"])
-async def test_opencode_executor_against_fake_model(client, origin, provider):
-    """Real OpenCode in the executor container, driven by a scripted model server
-    speaking the OpenAI chat API or Claude's Messages API."""
+@pytest.mark.parametrize(
+    ("kind", "provider"), [("pi", "openai"), ("opencode", "openai"), ("opencode", "anthropic")]
+)
+async def test_executor_against_fake_model(client, origin, kind, provider):
+    """A real agent (pi / OpenCode) in the executor container, on the isolated network,
+    driven by a scripted model server through the gateway relay, speaking the OpenAI
+    chat API or Claude's Messages API."""
     from sqlmodel import select
 
     from foreman.core.models import Event
@@ -134,14 +144,18 @@ async def test_opencode_executor_against_fake_model(client, origin, provider):
         node = {"name": "fake", "base_url": llm.url}
         model = MODEL
         if provider == "anthropic":
-            node = {"name": "claude", "provider": "anthropic", "api_key": "sk-host-only",
-                    "base_url": llm.url.removesuffix("/v1")}
+            node = {
+                "name": "claude",
+                "provider": "anthropic",
+                "api_key": "sk-host-only",
+                "base_url": llm.url.removesuffix("/v1"),
+            }
             model = "claude-haiku-5-5"
         n = client.post("/api/nodes", json=node).json()
         p = make_project(
             client,
             origin,
-            executor_kind="opencode",
+            executor_kind=kind,
             role_bindings={"executor": {"node_id": n["id"], "model": model}},
         )
         from foreman import gitops
@@ -180,7 +194,8 @@ async def test_opencode_executor_against_fake_model(client, origin, provider):
         llm.stop()
 
 
-async def test_spec_to_done_with_opencode(client, origin):
+@pytest.mark.parametrize("kind", ["pi", "opencode"])
+async def test_spec_to_done_with_agent(client, origin, kind):
     """E2E-1: spec chat -> approve -> decomposition -> plan approval -> OpenCode in a
     container implements the task -> validation -> merged. One fake model plays both
     the planner and the coding agent."""
@@ -225,7 +240,7 @@ async def test_spec_to_done_with_opencode(client, origin):
             json={
                 "name": "hello",
                 "repo_url": str(origin),
-                "executor_kind": "opencode",
+                "executor_kind": kind,
                 "gates": {"milestone": False},
                 "role_bindings": {
                     "project_planner": planning,
@@ -266,45 +281,6 @@ async def test_spec_to_done_with_opencode(client, origin):
         llm.stop()
 
 
-PROBE_NET = """
-probe() { curl -s -m 4 -o /dev/null -w '%{http_code}' "$1" || true; }
-echo "internet=$(probe https://example.com)" > net.txt
-echo "host=$(probe http://host.docker.internal:$HOST_PORT/)" >> net.txt
-echo "bridge=$(probe http://172.17.0.1:$HOST_PORT/)" >> net.txt
-echo "gateway=$(probe http://foreman-gateway:8701/health)" >> net.txt
-"""
-
-
-@pytest.mark.parametrize("network", ["gateway", "open"])
-async def test_network_modes(client, origin, network):
-    """V4.4: in "gateway" mode an executor reaches the model gateway and nothing else."""
-    import http.server
-    import threading
-
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), http.server.SimpleHTTPRequestHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        p = make_project(client, origin, network=network)
-        port = server.server_address[1]
-        t = make_task(client, p["id"], script=PROBE_NET.replace("$HOST_PORT", str(port)))
-        await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=120)
-        assert task(t["id"]).state == TaskState.DONE, task(t["id"]).reason
-        from foreman import gitops
-
-        result = dict(
-            line.split("=", 1)
-            for line in (gitops.repo_dir(p["id"]) / "net.txt").read_text().split()
-        )
-    finally:
-        server.shutdown()
-    if network == "gateway":
-        assert result["gateway"] == "200"  # the model is reachable...
-        assert result["internet"] == "000"  # ...and nothing else is
-        assert result["host"] == "000" and result["bridge"] == "000"
-    else:
-        assert result["host"] == "200"
-
-
 def _toolchain(nonce: str, extra: str = "") -> str:
     # The nonce makes each test run build afresh instead of reusing an earlier image.
     return (
@@ -318,13 +294,9 @@ def _toolchain(nonce: str, extra: str = "") -> str:
 
 
 def _remove_project_images() -> None:
-    out = subprocess.run(
-        ["docker", "images", "-q", "--filter", "label=foreman=1", "foreman/project-*"],
-        capture_output=True,
-        text=True,
-    ).stdout.split()
+    out = docker("images", "-q", "--filter", "label=foreman=1", "foreman/project-*").stdout.split()
     if out:
-        subprocess.run(["docker", "rmi", "-f", *out], capture_output=True)
+        docker("rmi", "-f", *out)
 
 
 async def test_tasks_run_in_the_project_toolchain_image(client, origin, tmp_path):
@@ -430,3 +402,91 @@ async def test_tester_cannot_write_code_inside_its_container(client, origin):
     await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=180)
     row = task(t["id"])
     assert row.state == TaskState.FAILED and "exited with status 4" in row.reason
+
+
+def test_isolated_network_reaches_only_the_gateway(tmp_path):
+    """Egress lockdown: on the isolated network an executor reaches the model gateway
+    through the relay, and nothing else - not the host, the LAN or the internet."""
+    from foreman import doctor, engine
+    from foreman.engine import docker_env
+    from foreman.sandbox import RELAY_URL, DockerRuntime, StepSpec, ensure_relay
+
+    eng = engine.detect()
+    server, port = doctor._serve(eng.bind_host)  # stands in for the gateway
+    ws, ctl = tmp_path / "ws", tmp_path / "ctl"
+    ws.mkdir()
+    ctl.mkdir()
+
+    def run(script: str, network: str = "isolated") -> subprocess.CompletedProcess[str]:
+        spec = StepSpec(
+            name=f"foreman-egress-{time.time_ns() % 10**9}",
+            workspace=ws,
+            ctl_dir=ctl,
+            command=["sh", "-c", script],
+            network=network,
+        )
+        return subprocess.run(
+            DockerRuntime().docker_args(spec),
+            capture_output=True,
+            text=True,
+            env=docker_env(),
+            timeout=120,
+        )
+
+    try:
+        ensure_relay(port)
+        through_relay = run(f"curl -fsS --max-time 10 {RELAY_URL}/")
+        assert through_relay.returncode == 0 and "foreman-doctor" in through_relay.stdout, (
+            through_relay.stderr
+        )
+        for url in (
+            f"http://host.docker.internal:{port}/",  # the host directly
+            "http://1.1.1.1/",  # anything by IP
+            "https://example.com/",  # anything by name
+        ):
+            r = run(f"curl -fsS --max-time 5 {url}")
+            assert r.returncode != 0, f"{url} was reachable from the isolated network"
+        # An "open" project keeps today's behaviour.
+        assert (
+            run(f"curl -fsS --max-time 10 http://host.docker.internal:{port}/", "open").returncode
+            == 0
+        )
+    finally:
+        server.shutdown()
+
+
+async def test_pi_stuck_in_a_loop_is_stopped_by_the_watchdog(client, origin):
+    """pi exits 0 whatever happens, so a run the gateway trips must still fail, and the
+    agent must be killed rather than allowed to keep calling the model."""
+    import uuid
+
+    from tests.fakellm import MODEL, FakeLLM
+
+    class Looping(FakeLLM):
+        def decide(self, req):
+            call = {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {"name": "bash", "arguments": json.dumps({"command": "ls"})},
+            }
+            return {"role": "assistant", "content": None, "tool_calls": [call]}, "tool_calls"
+
+    llm = Looping().start()
+    try:
+        n = client.post("/api/nodes", json={"name": "loop", "base_url": llm.url}).json()
+        p = make_project(
+            client,
+            origin,
+            executor_kind="pi",
+            role_bindings={"executor": {"node_id": n["id"], "model": MODEL}},
+            watchdog={"max_retries": 0},
+        )
+        t = make_task(client, p["id"], script="", title="Loop forever", validation="true")
+        settled = (*TERMINAL, TaskState.BLOCKED)
+        await drive(Orchestrator(), lambda: task(t["id"]).state in settled, timeout=180)
+        reason = task(t["id"]).reason
+        assert task(t["id"]).state == TaskState.BLOCKED, reason  # no retries: needs you
+        assert "same response" in reason, reason
+        assert len(llm.requests) < 30  # tripped early, not after a long burn
+    finally:
+        llm.stop()

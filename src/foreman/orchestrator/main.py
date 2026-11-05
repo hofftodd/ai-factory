@@ -21,7 +21,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from foreman import gitops
+from foreman import engine, gitops, sandbox
 from foreman.config import get_settings
 from foreman.core import gates, roles, spend
 from foreman.core.models import (
@@ -52,7 +52,7 @@ from foreman.llm import list_models
 from foreman.orchestrator import gate_actions, milestone
 from foreman.orchestrator.jobs import JobRunner, finish_job, job_role
 from foreman.orchestrator.runner import TaskRunner, first_role, resolve_executor, uses_pipeline
-from foreman.sandbox import Runtime, ensure_egress_lockdown, get_runtime, kill_handle
+from foreman.sandbox import Runtime, get_runtime, kill_handle
 
 log = logging.getLogger("foreman.orchestrator")
 
@@ -156,9 +156,14 @@ async def check_nodes() -> None:
             s.add(row)
             s.commit()
         if changed:
-            emit(None, None, "system",
-                 f"node {node.name} is {'back' if healthy else 'unreachable'}"
-                 + (f": {error}" if error else ""), node_id=node.id)
+            emit(
+                None,
+                None,
+                "system",
+                f"node {node.name} is {'back' if healthy else 'unreachable'}"
+                + (f": {error}" if error else ""),
+                node_id=node.id,
+            )
 
     await asyncio.gather(*(one(n) for n in nodes))
 
@@ -230,7 +235,6 @@ class Orchestrator:
         self.gateway: Gateway | None = None
         self.gateway_server: Any = None
         self.gateway_port = 0
-        self.locked_url = ""
         self._health: asyncio.Task[None] | None = None
         self._last_health = 0.0
         self._stop = asyncio.Event()
@@ -238,32 +242,27 @@ class Orchestrator:
     async def ensure_gateway(self) -> None:
         if self.gateway is None:
             self.gateway = Gateway()
+            bind = await asyncio.to_thread(self.gateway_bind_host)
             self.gateway_server, self.gateway_port = await serve(
-                self.gateway, self.settings.gateway_host, self.settings.gateway_port
+                self.gateway, bind, self.settings.gateway_port
             )
-            log.info("model gateway on port %s", self.gateway_port)
-        if self.runtime.name == "docker" and not self.locked_url:
-            try:
-                self.locked_url = await asyncio.to_thread(
-                    ensure_egress_lockdown, self.gateway_port
-                )
-                log.info("executor network locked down; gateway at %s", self.locked_url)
-            except (RuntimeError, OSError) as e:
-                # Tasks in "gateway" network mode fail with a config error until fixed.
-                log.error("egress lockdown unavailable: %s", e)
+            log.info("model gateway on %s:%s", bind, self.gateway_port)
+
+    def gateway_bind_host(self) -> str:
+        """Where the gateway listens: only where executors arrive (foreman.engine)."""
+        if self.settings.gateway_host != "auto":
+            return self.settings.gateway_host
+        if self.runtime.name != "docker":
+            return "127.0.0.1"
+        return engine.detect().bind_host
 
     @property
-    def gateway_urls(self) -> dict[str, str]:
-        """The gateway as reachable from executors, per network mode."""
+    def gateway_url(self) -> str:
+        """The gateway as reachable from where executors run."""
         if not self.gateway_port:
-            return {}
-        if self.runtime.name != "docker":
-            local = f"http://127.0.0.1:{self.gateway_port}"
-            return {"gateway": local, "open": local}
-        urls = {"open": f"http://host.docker.internal:{self.gateway_port}"}
-        if self.locked_url:
-            urls["gateway"] = self.locked_url
-        return urls
+            return ""
+        host = engine.HOST_ALIAS if self.runtime.name == "docker" else "127.0.0.1"
+        return f"http://{host}:{self.gateway_port}"
 
     def start_task(self, task: Task, node_id: int | None, model: str) -> bool:
         assert task.id is not None
@@ -294,7 +293,9 @@ class Orchestrator:
             run_id = run.id
         assert run_id is not None
         emit(task.project_id, task_id, "system", f"attempt {t.attempts} started", run_id=run_id)
-        runner = TaskRunner(task_id, run_id, self.runtime, self.gateway_urls)
+        runner = TaskRunner(
+            task_id, run_id, self.runtime, self.gateway_url, gateway_port=self.gateway_port
+        )
         self.running[task_id] = asyncio.create_task(runner.run())
         return True
 
@@ -382,6 +383,9 @@ class Orchestrator:
             self.gateway_server.should_exit = True
         if self.gateway is not None:
             await self.gateway.aclose()
+        if self.runtime.name == "docker":
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(sandbox.teardown_isolation)
 
     async def run_forever(self) -> None:
         recover()

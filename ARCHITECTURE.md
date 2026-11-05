@@ -230,7 +230,8 @@ results:
 
 Agents are given real freedom inside their box, so the box matters.
 
-**The sandbox.** Each attempt runs in a fresh Docker container, built from
+**The sandbox.** Each step runs in a fresh Docker container (on macOS, inside
+a small Lima VM that `foreman vm start` manages), built from
 Ubuntu 24.04, as an unprivileged user, with limited CPU and memory. It sees
 only two things from your machine: the task's clone (read-write) and its
 briefing (read-only), with the code or the tests also read-only depending
@@ -318,8 +319,8 @@ and model for each agent, plus one for escalation:
 
 - **Project Planner** and **Task Planner**: a model good at reasoning and
   writing (for example Claude Opus, or your biggest local model);
-- **Tester** and **Builder**: the coding agent's model (OpenCode, or
-  optionally Aider, drives it);
+- **Tester** and **Builder**: the coding agent's model (pi by default;
+  OpenCode or Aider can drive it instead);
 - **Escalation**: a stronger model for Tester or Builder steps that keep
   failing (optional).
 

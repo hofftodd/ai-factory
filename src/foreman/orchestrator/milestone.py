@@ -22,7 +22,7 @@ from typing import Any
 import httpx
 from sqlmodel import col, select
 
-from foreman import gitops, images, testresults
+from foreman import gitops, images, sandbox, testresults
 from foreman.config import get_settings
 from foreman.core import gates, watchdog
 from foreman.core.models import (
@@ -134,6 +134,14 @@ async def run_acceptance(project_id: int, runtime: Runtime) -> None:
         image=image,
         results_dir=results,
     )
+    if runtime.name == "docker" and project.network != "open":
+        try:
+            await asyncio.to_thread(sandbox.ensure_exec_network)
+        except sandbox.IsolationError as e:
+            _record(project_id, head, False)
+            emit(project_id, None, "test", f"acceptance: {e}", step="acceptance", passed=False)
+            _failed(project_id, str(e))
+            return
     emit(project_id, None, "test", f"acceptance: $ {cmd}", step="acceptance")
     proc = await runtime.start(spec)
     _set_handle(project_id, proc.handle)

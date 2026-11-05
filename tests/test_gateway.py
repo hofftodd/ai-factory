@@ -203,9 +203,7 @@ def test_budget_failure_requeues_without_counting():
         t = Task(project_id=p.id, title="t", state=TaskState.FAILED)
         s.add(t)
         s.commit()
-        run = TaskRun(
-            task_id=t.id, project_id=p.id, failure_kind="budget", state=RunState.FAILED
-        )
+        run = TaskRun(task_id=t.id, project_id=p.id, failure_kind="budget", state=RunState.FAILED)
         s.add(run)
         s.commit()
         tid, rid = t.id, run.id

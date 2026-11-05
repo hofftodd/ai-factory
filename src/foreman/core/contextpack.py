@@ -170,9 +170,17 @@ def _fence(path: str) -> str:
 # -- the pack -----------------------------------------------------------------
 
 
-def budget_tokens(project: Project, context_window: int | None) -> int:
+def budget_tokens(
+    project: Project, context_window: int | None, executor_kind: str | None = None
+) -> int:
+    """Tokens a task's context pack may use: `context_budget_pct` of the window left
+    after the executor's own system prompt and tool schemas."""
+    from foreman.executors import EXECUTORS
+
     window = context_window or DEFAULT_CONTEXT_WINDOW
-    return window * project.context_budget_pct // 100
+    executor = EXECUTORS.get(executor_kind or project.executor_kind)
+    overhead = executor.prompt_overhead_tokens if executor else 0
+    return max(window - overhead, 0) * project.context_budget_pct // 100
 
 
 def build_pack(
@@ -255,7 +263,7 @@ def build_pack(
     return ContextPack(
         text=text,
         tokens=estimate_tokens(text),
-        budget=budget_tokens(project, context_window),
+        budget=budget_tokens(project, context_window, task.executor_kind or None),
         files=editable,
         missing_refs=missing,
     )
@@ -297,8 +305,7 @@ RESULTS_CONTRACT = [
     "## How tests run",
     "`tests/run.sh` runs the whole test suite. It must exit non-zero when any test fails "
     "and write, into the directory `$FOREMAN_RESULTS`:",
-    "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, "
-    "gotestsum);",
+    "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, gotestsum);",
     "- `coverage.xml` (Cobertura) or `lcov.info`: line coverage of the project's code.",
     "There is no internet access: use only what the toolchain image provides.",
     "",
@@ -436,7 +443,7 @@ def build_role_pack(
     return ContextPack(
         text=text,
         tokens=estimate_tokens(text),
-        budget=budget_tokens(project, context_window),
+        budget=budget_tokens(project, context_window, task.executor_kind or None),
         files=task_tests or [],
         missing_refs=missing,
     )

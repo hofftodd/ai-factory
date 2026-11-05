@@ -297,15 +297,11 @@ def task_summary(task: Task) -> str:
         lines += ["Its criteria:", *[f"- {c}" for c in task.criteria]]
     with session() as s:
         result = s.exec(
-            select(TestRun)
-            .where(TestRun.task_id == task.id)
-            .order_by(col(TestRun.id).desc())
+            select(TestRun).where(TestRun.task_id == task.id).order_by(col(TestRun.id).desc())
         ).first()
     if result is not None:
         cov = f", {result.coverage:.0f}% coverage" if result.coverage is not None else ""
-        lines.append(
-            f"Tests: {result.passed} passed, {result.failed + result.errors} failed{cov}."
-        )
+        lines.append(f"Tests: {result.passed} passed, {result.failed + result.errors} failed{cov}.")
     return "\n".join(lines)
 
 
@@ -500,5 +496,9 @@ def apply_spec_change(project_id: int, payload: dict[str, Any]) -> None:
         )
         s.add(PlannerJob(project_id=project_id, kind=JobKind.CHAT))
         s.commit()
-    emit(project_id, None, "replan", "spec change approved; the Project Planning Agent updates "
-         "the documents")
+    emit(
+        project_id,
+        None,
+        "replan",
+        "spec change approved; the Project Planning Agent updates the documents",
+    )

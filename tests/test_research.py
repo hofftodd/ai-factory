@@ -58,8 +58,12 @@ async def test_local_planner_searches_through_foreman(llm, searx):
     node = Node(name="local", base_url=llm.url)
     found: list[str] = []
     result = await stream_chat(
-        node, "m", "S", [{"role": "user", "content": "storage?"}],
-        research=True, on_research=found.append,
+        node,
+        "m",
+        "S",
+        [{"role": "user", "content": "storage?"}],
+        research=True,
+        on_research=found.append,
     )
     assert result.text == "Based on my research: use SQLite."
     assert found == ["searched: x"] and "q=x" in searx[0]
@@ -77,8 +81,9 @@ async def test_no_search_service_means_no_tools(llm, monkeypatch):
 
 
 async def test_claude_gets_server_side_research_tools_and_resumes_paused_turns(llm):
-    node = Node(name="claude", provider="anthropic", base_url=llm.url.removesuffix("/v1"),
-                api_key="k")
+    node = Node(
+        name="claude", provider="anthropic", base_url=llm.url.removesuffix("/v1"), api_key="k"
+    )
     llm.anthropic_stops = ["pause_turn"]
     result = await stream_chat(
         node, "claude-opus-5-5", "S", [{"role": "user", "content": "x"}], research=True
@@ -91,15 +96,22 @@ async def test_claude_gets_server_side_research_tools_and_resumes_paused_turns(l
 
 
 async def test_planner_without_research_has_no_tools(llm):
-    node = Node(name="claude", provider="anthropic", base_url=llm.url.removesuffix("/v1"),
-                api_key="k")
+    node = Node(
+        name="claude", provider="anthropic", base_url=llm.url.removesuffix("/v1"), api_key="k"
+    )
     await stream_chat(node, "claude-opus-5-5", "S", [{"role": "user", "content": "x"}])
     assert "tools" not in llm.requests[-1]
 
 
 @pytest.mark.parametrize(
-    "url", ["http://127.0.0.1:8700/api/nodes", "http://localhost/", "http://10.0.0.5/x",
-            "http://169.254.169.254/latest/meta-data", "file:///etc/passwd"],
+    "url",
+    [
+        "http://127.0.0.1:8700/api/nodes",
+        "http://localhost/",
+        "http://10.0.0.5/x",
+        "http://169.254.169.254/latest/meta-data",
+        "file:///etc/passwd",
+    ],
 )
 async def test_fetch_refuses_private_addresses(url):
     out = await research.run_tool("web_fetch", {"url": url})

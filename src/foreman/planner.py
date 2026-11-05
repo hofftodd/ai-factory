@@ -151,7 +151,7 @@ PLAIN_LANGUAGE = (
 
 
 def chat_stage(docs: dict[str, str]) -> str:
-    """"design" until the three planning documents exist, then "review"."""
+    """ "design" until the three planning documents exist, then "review"."""
     if not all(docs.get(n, "").strip() for n in roles.PLANNING_DOCS):
         return "design"
     return "review"

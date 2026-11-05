@@ -2,16 +2,21 @@
 #
 # Minimal Ubuntu Server userland plus git and the executor CLIs. Projects that
 # need language toolchains add them in their own `.foreman/Dockerfile`
-# (FROM foreman/executor-base) - not here.
+# (FROM foreman/executor-base) - not here. pi needs Node.js; it gets a private copy
+# under /opt/pi that is not on PATH, so `node` is still the project's own choice.
+#
+# socat runs the gateway relay for the isolated executor network (foreman.sandbox).
 #
 #   docker build -t foreman/executor-base:latest docker/executor-base
-#   docker build --build-arg OPENCODE_VERSION=1.19.0 -t foreman/executor-base:latest docker/executor-base
+#   docker build --build-arg PI_VERSION=1.4.0 -t foreman/executor-base:latest docker/executor-base
 #   docker build --build-arg WITH_AIDER=1 -t foreman/executor-base:latest docker/executor-base
 
 FROM ubuntu:24.04
 
-ARG OPENCODE_VERSION=latest
-# Optional second executor: Aider (adds Python and ~300 MB).
+ARG OPENCODE_VERSION=1.19.3
+ARG PI_VERSION=1.4.0
+ARG PI_NODE_VERSION=22.23.4
+# Optional extra executor: Aider (adds Python and ~300 MB).
 ARG WITH_AIDER=0
 ARG TARGETARCH
 
@@ -34,6 +39,22 @@ RUN set -eux; \
     curl -fsSL "$url" | tar -xz -C /usr/local/bin opencode; \
     chmod 0755 /usr/local/bin/opencode; \
     opencode --version
+
+# pi (https://pi.dev): its own Node runtime under /opt/pi/node, invoked explicitly by
+# the wrapper so neither node nor npm lands on PATH for the agent's shell commands.
+RUN set -eux; \
+    arch="$(case "${TARGETARCH:-amd64}" in amd64) echo x64 ;; arm64) echo arm64 ;; *) echo "${TARGETARCH}" ;; esac)"; \
+    mkdir -p /opt/pi/node; \
+    curl -fsSL "https://nodejs.org/dist/v${PI_NODE_VERSION}/node-v${PI_NODE_VERSION}-linux-${arch}.tar.gz" \
+      | tar -xz -C /opt/pi/node --strip-components=1; \
+    PATH="/opt/pi/node/bin:$PATH" npm install -g --prefix /opt/pi --ignore-scripts --no-fund --no-audit \
+      "@earendil-works/pi-coding-agent@${PI_VERSION}"; \
+    rm -rf /root/.npm; \
+    printf '#!/bin/sh\nexec /opt/pi/node/bin/node /opt/pi/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js "$@"\n' \
+      > /usr/local/bin/pi; \
+    chmod 0755 /usr/local/bin/pi; \
+    pi --version; \
+    ! command -v node
 
 RUN set -eux; \
     if [ "$WITH_AIDER" = "1" ]; then \

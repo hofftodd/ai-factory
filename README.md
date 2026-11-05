@@ -12,7 +12,9 @@ done (M1 sandboxed execution + stop controls, M2 specify & decompose, M3
 autonomy, M4 multi-node scheduling, spend caps, egress lockdown, toolchain
 images, portfolio view, Aider), plus strict agent roles: tests first on every
 task, test results and coverage per task and project, and web research for
-the Project Planner. Specs, plan and acceptance criteria live in
+the Project Planner. Runs on **Linux and macOS**; the coding agent is **pi**
+by default (OpenCode and Aider are alternatives). Specs, plan and acceptance
+criteria live in
 [`specs/000-orchestrator/`](specs/000-orchestrator/).
 
 <p>
@@ -58,8 +60,11 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
 4. **Review the plan** (optional checkpoint, on by default). Edit, drop or
    re-run tasks. `tasks.md` is committed alongside the documents.
 5. **Execute, autonomously.** Tasks run one at a time per project in Docker
-   containers built from `ubuntu:24.04`, using OpenCode (or Aider) as the
-   coding agent. You never say how a task is tested; each one goes:
+   containers built from `ubuntu:24.04`, using [pi](https://pi.dev) as the
+   coding agent (or OpenCode or Aider, per project or task). pi's own prompt
+   is about 1.4k tokens against OpenCode's 7.4k, and context packs are sized
+   from what is left of the model's window, so pi leaves more room for the
+   task on a local model. You never say how a task is tested; each one goes:
    - **Tester:** writes tests from the task's criteria; they must fail
      first. Only test files may change.
    - **Builder:** writes code until those tests and the whole suite pass.
@@ -77,14 +82,16 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      the coverage of its changes; the project page shows the latest suite,
      the acceptance tests and coverage over time.
    - **Toolchain.** Containers start from `foreman/executor-base` (Ubuntu,
-     git, OpenCode, no language runtimes). A project's `.foreman/Dockerfile`
-     (`FROM foreman/executor-base`) is built into a per-project image before
-     the first task and rebuilt only when it changes; agents, tests and
+     git, pi and OpenCode, no language runtimes on PATH). A project's
+     `.foreman/Dockerfile` (`FROM foreman/executor-base`, written by the
+     Builder in the setup task) is built into a per-project image before the
+     first task and rebuilt only when it changes; agents, tests and
      acceptance checks run in it. Builds can be stopped like any task.
-   - **Sandbox.** Containers run as an unprivileged user on an internal
-     Docker network whose only reachable endpoint is Foreman's model gateway:
-     no internet, no LAN, no host (switch a project to "open" network if its
-     tasks really need it).
+   - **Network.** Executor containers run as an unprivileged user on an
+     internal Docker network where the only thing reachable is a relay to
+     the gateway: no LAN, no model servers directly, no internet, no host. A
+     project whose tests need the network can switch to "open" in its
+     settings.
    - **Nodes.** Projects run side by side across your model servers. Each
      node has a capacity shared by task steps and planning calls, and is
      health-checked every minute; work waits for a free slot on a healthy
@@ -230,15 +237,42 @@ checkpoints.
 
 ## Quick start
 
-Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 20+, Docker, git.
+Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 20+ (to build
+the dashboard), git, and a Docker engine: Docker on Linux, or on macOS the
+Lima VM below.
 
 ```bash
 uv sync                          # Python deps
 (cd web && npm ci && npm run build)   # dashboard
-uv run foreman build-image       # foreman/executor-base (ubuntu:24.04 + git + opencode)
+uv run foreman vm start          # macOS only: the Lima VM containers run in
+uv run foreman build-image       # foreman/executor-base (ubuntu:24.04 + git + pi + opencode)
                                  # add --with-aider to include Aider as well
+uv run foreman doctor            # checks Docker, the image, mounts and gateway reachability
 uv run foreman up                # api + orchestrator + supervisor
 ```
+
+### Hosting on macOS
+
+Foreman itself runs natively on the Mac; its containers run in a small Linux
+VM that Foreman manages with [Lima](https://lima-vm.io):
+
+```bash
+brew install lima
+uv run foreman vm start          # creates the VM on first use, then starts it
+uv run foreman vm status         # state, size, mounts
+```
+
+The VM uses Apple's virtualization framework with virtiofs, runs rootful
+Docker, and can see exactly one host directory: `FOREMAN_DATA_DIR`, mounted
+writable at the same path. Nothing else from your home directory is visible
+to it. Foreman finds the VM's Docker socket on its own. Size it with
+`FOREMAN_VM_CPUS` / `FOREMAN_VM_MEMORY_GIB` before the first start (the
+default leaves most of the machine to your model servers); if you move the
+data directory, `foreman vm delete` and start again.
+
+Docker Desktop, OrbStack or colima work too: point `DOCKER_HOST` (or
+`FOREMAN_DOCKER_HOST`) at them, or just leave Docker Desktop's default
+context active, and run `foreman doctor`.
 
 Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
 
@@ -283,13 +317,16 @@ its Settings; nothing else changes.
 | `FOREMAN_HOST` / `FOREMAN_PORT` | `127.0.0.1` / `8700` | API bind address |
 | `FOREMAN_TOKEN` | *(empty)* | If set, required as `Authorization: Bearer …` |
 | `FOREMAN_RUNTIME` | `docker` | `local` runs executors as host processes (tests/dev only, **no isolation**) |
+| `FOREMAN_DOCKER_HOST` | *(empty)* | Docker socket for every docker command. Empty: `DOCKER_HOST`, else the Foreman Lima VM if it exists, else the docker CLI's current context |
+| `FOREMAN_VM_CPUS` / `FOREMAN_VM_MEMORY_GIB` | *(derived)* | Size of the Lima VM on macOS, at creation |
 | `FOREMAN_EXECUTOR_IMAGE` | `foreman/executor-base:latest` | Image for executor containers |
 | `FOREMAN_CONTAINER_CPUS` / `_MEMORY` | `2` / `4g` | Per-container limits |
 | `FOREMAN_STOP_GRACE_S` | `5` | SIGTERM → SIGKILL grace on Stop |
 | `FOREMAN_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config`. A token saved under **Settings** in the dashboard takes precedence |
 | `FOREMAN_NTFY_URL` | *(empty)* | Push notifications for the inbox, e.g. `https://ntfy.sh/my-secret-topic` |
 | `FOREMAN_PUBLIC_URL` | *(empty)* | Dashboard URL for links in notifications |
-| `FOREMAN_GATEWAY_HOST` / `_PORT` | `0.0.0.0` / `8701` | Model gateway. Locked-down containers reach it through a relay container; every URL carries a per-run secret, but you can bind it to the Docker bridge (e.g. `172.17.0.1`) to keep it off the LAN |
+| `FOREMAN_GATEWAY_HOST` / `_PORT` | `auto` / `8701` | Model gateway. `auto` listens only where containers arrive: the docker bridge address on Linux, loopback on macOS. Every URL also carries a per-run secret |
+| `FOREMAN_CONTAINER_HOST_IP` | `auto` | What `host.docker.internal` maps to inside containers: `host-gateway`, or Lima's host address (`192.168.5.2`) on Lima |
 | `FOREMAN_NODE_CHECK_S` | `60` | Seconds between node health checks (`0` disables them) |
 | `FOREMAN_SEARCH_URL` | *(empty)* | A [SearXNG](https://docs.searxng.org/) instance (JSON API) for the Project Planner's web research on local models. Claude uses its own web search |
 
@@ -318,16 +355,22 @@ Each task works in its own standalone clone (`data/projects/<id>/tasks/<task>`),
 mounted at `/workspace` in the container, with the test folders read-only
 for the Builder, or everything but the test folders read-only for the
 Tester. The rendered prompt and tool config are mounted read-only at
-`/foreman`, and test results are written to `/foreman-results`. Nothing else from the host is visible.
-Containers join `foreman-net-<instance>`, an internal Docker network; the
-`foreman-relay-<instance>` container on it forwards `foreman-gateway:8701` to
-the gateway on the host and is the only way out.
+`/foreman`, and test results are written to `/foreman-results`. Nothing else
+from the host is visible.
+
+Executor, validation and acceptance containers join the internal network
+`foreman-exec-<instance>`; a relay container, `foreman-gw-<instance>`, is the
+only other member and forwards one port to the model gateway. Toolchain image
+builds use the normal build network.
 
 ## Development
 
 ```bash
 uv run pytest -q                 # unit, integration, multi-process stop tests;
                                  # Docker tests run when the image is present
+uv run pytest -q --basetemp="$PWD/data/pytest"   # on the Lima VM: test dirs must be
+                                 # inside FOREMAN_DATA_DIR, the only path the VM sees
+uv run foreman doctor            # engine, image, mounts, gateway, isolated network
 uv run ruff check src tests && uv run mypy src
 (cd web && npm run dev)          # dashboard with hot reload, proxies /api to :8700
 scripts/e2e.sh                   # full stack + Playwright browser tests

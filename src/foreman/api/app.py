@@ -338,11 +338,11 @@ async def create_project(body: ProjectCreate) -> Project:
         phase=ProjectPhase.EXECUTE if body.skip_spec else ProjectPhase.SPECIFY,
         test_cmd=body.test_cmd,
         executor_kind=body.executor_kind,
+        network=body.network,
         role_bindings=bindings,
         push_after_merge=body.push_after_merge,
         gates=body.gates,
         watchdog=body.watchdog,
-        network=body.network,
         spend_cap_usd=body.spend_cap_usd,
         min_task_coverage=body.min_task_coverage,
     )

@@ -75,15 +75,20 @@ def test_task_cases_are_found_by_file_or_class():
 
 def test_changed_line_coverage(tmp_path):
     def git(*args):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path,
-                       check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
 
     git("init", "-q")
     (tmp_path / "greet.py").write_text("a\nb\n")
     git("add", "-A")
     git("commit", "-qm", "base")
-    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
-                          text=True).stdout.strip()
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout.strip()
     (tmp_path / "greet.py").write_text("a\nB\nc\nd\n")  # lines 2-4 changed/added
     git("commit", "-qam", "change")
     added = tr.added_lines(tmp_path, base, ["greet.py"])
@@ -95,11 +100,15 @@ def test_changed_line_coverage(tmp_path):
 
 
 def test_role_bindings_fall_back_for_older_projects():
-    p = Project(name="p", repo_url="x", role_bindings={
-        "planner": {"node_id": 1, "model": "big"},
-        "executor": {"node_id": 2, "model": "small"},
-        "tester": {"node_id": 3, "model": "mid"},
-    })
+    p = Project(
+        name="p",
+        repo_url="x",
+        role_bindings={
+            "planner": {"node_id": 1, "model": "big"},
+            "executor": {"node_id": 2, "model": "small"},
+            "tester": {"node_id": 3, "model": "mid"},
+        },
+    )
     assert roles.binding(p, roles.PROJECT_PLANNER)["model"] == "big"
     assert roles.binding(p, roles.TASK_PLANNER)["model"] == "big"
     assert roles.binding(p, roles.TESTER)["model"] == "mid"  # its own binding wins

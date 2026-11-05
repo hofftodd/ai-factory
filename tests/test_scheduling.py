@@ -88,9 +88,7 @@ def jobs_of(pid: int) -> list[PlannerJob]:
     with session() as s:
         return list(
             s.exec(
-                select(PlannerJob)
-                .where(PlannerJob.project_id == pid)
-                .order_by(col(PlannerJob.id))
+                select(PlannerJob).where(PlannerJob.project_id == pid).order_by(col(PlannerJob.id))
             ).all()
         )
 

@@ -53,10 +53,13 @@ fi
 
 RUNNER = "mkdir -p tests\ncat > tests/run.sh <<'EOS'\n" + RUN_SH + "EOS\n"
 
-TESTER = RUNNER + """cat > tests/check_greet.sh <<'EOS'
+TESTER = (
+    RUNNER
+    + """cat > tests/check_greet.sh <<'EOS'
 test "$(sh greet.sh bob)" = "hello bob"
 EOS
 """
+)
 BUILDER = """printf 'echo "hello $1"\\n' > greet.sh\n"""
 
 
@@ -177,9 +180,12 @@ async def test_failing_tests_fail_the_builder(client, origin):
 # Works, but one of its three lines is never run by the tests (66% < 80%).
 LOW = """printf 'echo "hello $1"\\nexit 0\\necho never # uncovered\\n' > greet.sh\n"""
 # Each Tester pass adds a test, so the send-back round has something new.
-MORE_TESTS = TESTER + """n=$(ls tests/check_*.sh | wc -l)
+MORE_TESTS = (
+    TESTER
+    + """n=$(ls tests/check_*.sh | wc -l)
 echo true > "tests/check_more_$n.sh"
 """
+)
 
 
 async def test_low_coverage_goes_back_to_the_tester_then_asks(client, origin):

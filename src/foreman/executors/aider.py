@@ -16,7 +16,7 @@ import shlex
 from pathlib import Path
 
 from foreman.core.models import Project, Task
-from foreman.executors.base import EXIT_CONFIG, ExecutorInvocation
+from foreman.executors.base import EXIT_CONFIG, ExecutorContext, ExecutorInvocation
 
 GLOB_CHARS = set("*?[")
 
@@ -30,6 +30,7 @@ class AiderExecutor:
     kind = "aider"
     needs_node = True
     providers = frozenset({"openai"})
+    prompt_overhead_tokens = 2500  # estimated: Aider's edit-format system prompt
 
     def prepare(
         self,
@@ -39,6 +40,7 @@ class AiderExecutor:
         model: str,
         ctl_dir: Path,
         prompt: str,
+        context: ExecutorContext | None = None,
         provider: str = "openai",
         role: str = "",
     ) -> ExecutorInvocation:
@@ -48,7 +50,8 @@ class AiderExecutor:
         edit = _literal(task.allowed_globs)
         read = [p for p in _literal(task.context_files) if p not in edit]
         args = [
-            "--model", f"openai/{model}",
+            "--model",
+            f"openai/{model}",
             "--yes-always",
             "--no-auto-commits",
             "--no-dirty-commits",

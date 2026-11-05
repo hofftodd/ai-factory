@@ -14,12 +14,13 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from sqlmodel import col, select
 
-from foreman import gitops, images, testresults
+from foreman import gitops, images, sandbox, testresults
 from foreman.config import get_settings
 from foreman.core import gates, roles, watchdog
 from foreman.core.contextpack import build_pack, build_role_pack
@@ -38,7 +39,7 @@ from foreman.core.models import (
 from foreman.core.state import ACTIVE_STATES, emit, finish_run, stop_requested, transition
 from foreman.core.watchdog import failure_signature
 from foreman.db import session
-from foreman.executors import EXIT_CONFIG, Executor, get_executor
+from foreman.executors import EXIT_CONFIG, Executor, ExecutorContext, OutputParser, get_executor
 from foreman.executors.shell import role_scripts
 from foreman.gateway import new_token
 from foreman.sandbox import Proc, Runtime, StepSpec, get_runtime, kill_handle
@@ -155,13 +156,15 @@ class TaskRunner:
         task_id: int,
         run_id: int,
         runtime: Runtime | None = None,
-        gateway_urls: dict[str, str] | None = None,
+        gateway_url: str = "",
+        gateway_port: int = 0,
     ):
         self.task_id = task_id
         self.run_id = run_id
         self.runtime = runtime or get_runtime()
-        # Base URL of the model gateway as seen from executors, per network mode.
-        self.gateway_urls = gateway_urls or {}
+        # Base URL of the model gateway as seen from where the executor runs.
+        self.gateway_url = gateway_url
+        self.gateway_port = gateway_port
         self._tail: list[str] = []
         self.image = ""  # set once the attempt's toolchain image is ready
         self.settings = get_settings()
@@ -209,11 +212,13 @@ class TaskRunner:
         env: dict[str, str],
         kind: str,
         timeout_s: float,
-        **sandbox: Any,
+        output: OutputParser | None = None,
+        **mounts: Any,
     ) -> int:
         """Run one container step, streaming output into events and a log file.
 
-        `sandbox` passes role restrictions and the results directory to StepSpec."""
+        `output` renders the executor's raw output; `mounts` passes role restrictions
+        and the results directory to StepSpec."""
         task, project = self._load()
         spec = StepSpec(
             name=f"foreman-run{self.run_id}-{name}-{int(time.time() * 1000) % 10**8}",
@@ -228,7 +233,7 @@ class TaskRunner:
             },
             network=project.network,
             image=self.image,
-            **sandbox,
+            **mounts,
         )
         proc = await self.runtime.start(spec)
         self._set_handle(proc.handle)
@@ -242,7 +247,7 @@ class TaskRunner:
         self._tail = []
         watcher = asyncio.create_task(self._watch(proc.handle))
         try:
-            code = await asyncio.wait_for(self._pump(proc, kind, name), timeout_s)
+            code = await asyncio.wait_for(self._pump(proc, kind, name, output), timeout_s)
         except TimeoutError:
             await asyncio.to_thread(kill_handle, proc.handle)
             raise WatchdogTrip(
@@ -283,6 +288,21 @@ class TaskRunner:
         self._emit("system", f"toolchain image {tag}")
         return tag
 
+    async def _isolate(self, setup: Callable[[], None]) -> None:
+        try:
+            await asyncio.to_thread(setup)
+        except sandbox.IsolationError as e:
+            raise ConfigError(f"isolated executor network: {e}") from e
+
+    async def _gateway_base(self, project: Project) -> str:
+        """The gateway as the executor reaches it: through the relay on an isolated
+        network, directly via host.docker.internal on an open one."""
+        if self.runtime.name != "docker" or project.network == "open":
+            return self.gateway_url
+        port = self.gateway_port
+        await self._isolate(lambda: sandbox.ensure_relay(port))
+        return sandbox.RELAY_URL
+
     def _watchdog_reason(self) -> str:
         with session() as s:
             run = s.get(TaskRun, self.run_id)
@@ -296,7 +316,11 @@ class TaskRunner:
                 await asyncio.to_thread(kill_handle, handle)
                 return
 
-    async def _pump(self, proc: Proc, kind: str, name: str) -> int:
+    async def _pump(
+        self, proc: Proc, kind: str, name: str, output: OutputParser | None = None
+    ) -> int:
+        """Raw output goes to the step's log file; what `output` renders (default: the
+        raw line) goes to the dashboard and the failure tail."""
         task, _ = self._load()
         log_path = self.run_dir / f"{name}.log"
         buf: list[str] = []
@@ -319,8 +343,11 @@ class TaskRunner:
         with log_path.open("a") as log:
             async for line in proc.lines():
                 log.write(line + "\n")
-                buf.append(line)
-                self._tail = [*self._tail[-79:], line]
+                shown = output.render(line) if output else line
+                if shown is None:
+                    continue
+                buf.append(shown)
+                self._tail = [*self._tail[-79:], *shown.splitlines()][-80:]
                 if len(buf) >= LOG_BATCH or time.monotonic() - last > LOG_FLUSH_S:
                     flush()
             flush()
@@ -400,10 +427,11 @@ class TaskRunner:
         else:
             await self._single_step(task, project, clone, executor)
 
-    def _agent_setup(
+    async def _agent_setup(
         self, project: Project, task: Task, role: str, executor: Executor
     ) -> tuple[Node | None, str, str]:
-        """(node, model, gateway endpoint) for the current run's agent."""
+        """(node, model, gateway endpoint) for the current run's agent. On an isolated
+        network, also makes sure the executor network (and the gateway relay) exist."""
         kind, node_id, model = resolve_executor(project, task, role)
         node = None
         if node_id is not None:
@@ -419,17 +447,15 @@ class TaskRunner:
             )
         endpoint = ""
         if executor.needs_node:
-            base = self.gateway_urls.get(project.network, "")
-            if not base:
-                raise ConfigError(
-                    "the model gateway is not reachable from executors"
-                    + (" (egress lockdown unavailable; see the orchestrator log)"
-                       if project.network == "gateway" else "")
-                )
+            if not self.gateway_url:
+                raise ConfigError("the model gateway is not running")
+            base = await self._gateway_base(project)
             with session() as s:
                 run = s.get(TaskRun, self.run_id)
                 assert run is not None
                 endpoint = f"{base}/g/{run.gateway_token}/v1"
+        elif self.runtime.name == "docker" and project.network != "open":
+            await self._isolate(sandbox.ensure_exec_network)
         return node, model, endpoint
 
     # -- scripted tasks: one step, the task's own validation command -------------
@@ -438,7 +464,7 @@ class TaskRunner:
         self, task: Task, project: Project, clone: Path, executor: Executor
     ) -> None:
         kind = executor.kind
-        node, model, endpoint = self._agent_setup(project, task, roles.BUILDER, executor)
+        node, model, endpoint = await self._agent_setup(project, task, roles.BUILDER, executor)
         pack = await asyncio.to_thread(
             build_pack,
             project,
@@ -461,17 +487,23 @@ class TaskRunner:
             self.run_dir / "ctl",
             pack.text,
             provider=node.provider if node else "openai",
+            context=ExecutorContext(context_window=node.context_window if node else None),
         )
         self._emit(
             "system", f"executor {kind} starting" + (f" on {node.name} / {model}" if node else "")
         )
-        code = await self._step("execute", inv.command, inv.env, "log", task.timeout_s)
+        code = await self._step(
+            "execute", inv.command, inv.env, "log", task.timeout_s, output=inv.output
+        )
         task = self._check()
         await asyncio.to_thread(gitops.commit_all, clone, f"Task {self.task_id}: {task.title}")
         if code == EXIT_CONFIG and executor.needs_node:
             raise ConfigError(self._tail[-1] if self._tail else f"{kind} is not usable here")
         if code != 0:
             raise StepFailed(f"executor exited with status {code}", "\n".join(self._tail))
+        failure = inv.output.failure() if inv.output else None
+        if failure:
+            raise StepFailed(f"executor failed: {failure}", "\n".join(self._tail))
 
         # Scope fence and diff size (FR-5.3)
         files = await asyncio.to_thread(gitops.changed_files, clone)
@@ -635,7 +667,7 @@ class TaskRunner:
         """Run one agent in its sandbox; returns the files it changed. Changes outside the
         role's capabilities are thrown away and fail the step."""
         task = self._check()
-        node, model, endpoint = self._agent_setup(project, task, role, executor)
+        node, model, endpoint = await self._agent_setup(project, task, role, executor)
         start = gitops.head(clone)
         test_paths = [d.strip("/") for d in (project.test_paths or ["tests"]) if d.strip("/")]
         from foreman.planner import BASE_IMAGE, doc_path
@@ -668,15 +700,18 @@ class TaskRunner:
             pack.text,
             provider=node.provider if node else "openai",
             role=role,
+            context=ExecutorContext(context_window=node.context_window if node else None),
         )
         who = roles.ROLES[role].name
         self._emit("system", f"{who} starting" + (f" on {node.name} / {model}" if node else ""))
-        sandbox: dict[str, Any] = {"results_dir": self._results_dir(f"{role}-agent")}
+        mounts: dict[str, Any] = {"results_dir": self._results_dir(f"{role}-agent")}
         if role == roles.TESTER:
-            sandbox |= {"workspace_readonly": True, "writable_dirs": test_paths}
+            mounts |= {"workspace_readonly": True, "writable_dirs": test_paths}
         else:
-            sandbox |= {"readonly_dirs": test_paths}
-        code = await self._step(role, inv.command, inv.env, "log", task.timeout_s, **sandbox)
+            mounts |= {"readonly_dirs": test_paths}
+        code = await self._step(
+            role, inv.command, inv.env, "log", task.timeout_s, output=inv.output, **mounts
+        )
         task = self._check()
         await asyncio.to_thread(
             gitops.commit_all, clone, f"Task {task.key or self.task_id} ({role}): {task.title}"
@@ -694,6 +729,9 @@ class TaskRunner:
             raise ConfigError(self._tail[-1] if self._tail else f"{executor.kind} is not usable")
         if code != 0:
             raise StepFailed(f"the {who} exited with status {code}", "\n".join(self._tail))
+        failure = inv.output.failure() if inv.output else None
+        if failure:
+            raise StepFailed(f"the {who} failed: {failure}", "\n".join(self._tail))
         self._emit("diff", f"{who}: {len(changed)} file(s) changed", files=changed, role=role)
         return changed
 
@@ -765,7 +803,11 @@ class TaskRunner:
         results_dir = self._results_dir(f"{step}-suite")
         self._emit("test", f"$ {cmd}", step=f"tests-{step}")
         code = await self._step(
-            f"tests-{step}", ["bash", "-lc", cmd], {}, "test", task.timeout_s,
+            f"tests-{step}",
+            ["bash", "-lc", cmd],
+            {},
+            "test",
+            task.timeout_s,
             results_dir=results_dir,
         )
         await asyncio.to_thread(gitops.clean_tree, clone)

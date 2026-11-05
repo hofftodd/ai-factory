@@ -7,6 +7,8 @@ foreman supervisor    stop / E-stop enforcement
 foreman build-image   build the executor base image (--with-aider adds Aider)
 foreman claude-nodes  add Claude Opus / Sonnet / Haiku nodes from $ANTHROPIC_API_KEY
                       (--project ID also assigns them to that project's roles)
+foreman vm ACTION     macOS: the Lima VM containers run in (start|stop|status|shell|delete)
+foreman doctor        check that this host can run executors
 """
 
 from __future__ import annotations
@@ -75,8 +77,10 @@ def _build_image(args: argparse.Namespace) -> None:
     root = Path(__file__).resolve().parents[2]
     ctx = root / "docker" / "executor-base"
     tag = get_settings().executor_image
+    from foreman.engine import docker_env
+
     extra = ["--build-arg", "WITH_AIDER=1"] if args.with_aider else []
-    sys.exit(subprocess.call(["docker", "build", *extra, "-t", tag, str(ctx)]))
+    sys.exit(subprocess.call(["docker", "build", *extra, "-t", tag, str(ctx)], env=docker_env()))
 
 
 def _claude_nodes(args: argparse.Namespace) -> None:
@@ -103,6 +107,21 @@ def _claude_nodes(args: argparse.Namespace) -> None:
         print("assign them under a project's Settings, or rerun with --project ID")
 
 
+def _vm(args: list[str]) -> None:
+    from foreman.vm import main as vm_main
+
+    vm_main(args)
+
+
+def _doctor(args: list[str]) -> None:
+    from foreman.doctor import main as doctor_main
+
+    doctor_main(args)
+
+
+# Commands that take further arguments.
+ARG_COMMANDS = {"vm": _vm, "doctor": _doctor}
+
 COMMANDS = {
     "up": _up,
     "api": _api,
@@ -115,10 +134,16 @@ COMMANDS = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="foreman")
-    parser.add_argument("command", choices=sorted(COMMANDS))
+    parser.add_argument("command", choices=sorted([*COMMANDS, *ARG_COMMANDS]))
+    parser.add_argument("args", nargs="*")
     parser.add_argument("--with-aider", action="store_true", help="build-image: include Aider")
     parser.add_argument("--project", type=int, help="claude-nodes: project to assign roles in")
     args = parser.parse_args()
+    if args.command in ARG_COMMANDS:
+        ARG_COMMANDS[args.command](args.args)
+        return
+    if args.args:
+        parser.error(f"{args.command} takes no arguments")
     COMMANDS[args.command](args)
 
 

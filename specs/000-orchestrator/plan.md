@@ -129,12 +129,14 @@ and default role bindings.
 - Configurable gates + "Needs you" inbox + ntfy notifications.
 - Milestone PRs on GitHub.
 
-### M4 — Multi-node & polish ✅
+### M4 — Hosts, pi, egress; multi-node & polish ✅ (see §11–12)
+- macOS hosting next to Linux (Lima VM), pi executor (default), executor
+  network locked to the gateway.
 - Multi-node scheduling with capacities, node health view.
 - Cloud spend tracking and caps.
 - Portfolio dashboard, validation trend charts.
 - Aider executor; crash-recovery hardening.
-- Carried over from M3: container egress lockdown, per-project toolchain images.
+- Carried over from M3: per-project toolchain images.
 
 ## 7. Risks
 
@@ -249,7 +251,7 @@ Design changes made while building M1 (spec updated where relevant):
 | V3.2 over-budget tasks are split, never queued | ✅ retry loop + approval block (`test_oversized_task_is_sent_back_to_be_split`, `test_persistent_violations_block_plan_approval`) |
 | V3.3 acyclic graph | ✅ cycle detection before tasks are created |
 | V8.5 in-flight planner stream aborted on Stop | ✅ `test_stop_aborts_planner_mid_stream_and_applies_nothing` |
-| E2E-1 spec → done with a real executor | ✅ `test_spec_to_done_with_opencode` (Docker, OpenCode, fake model) and Playwright `web/e2e/spec.spec.ts` |
+| E2E-1 spec → done with a real executor | ✅ `test_spec_to_done_with_agent[pi|opencode]` (Docker, pi and OpenCode, fake model) and Playwright `web/e2e/spec.spec.ts` |
 
 ### Known gaps carried into M3+
 
@@ -323,18 +325,76 @@ Design changes made while building M1 (spec updated where relevant):
 - Token counts fall back to estimates when a server doesn't report usage.
 - Regression detection is exit-code based.
 
-## 11. M4 implementation notes
+## 11. M4 part 1 implementation notes: macOS hosts, pi, egress
 
-- **Egress lockdown** (FR-4.6, `sandbox.ensure_egress_lockdown`): executor
-  containers join `foreman-net-<instance>`, a Docker `--internal` network.
-  Its only other member is `foreman-relay-<instance>` (socat in the base
-  image), which also sits on the default bridge and forwards
-  `foreman-gateway:8701` to the gateway port on the host. The allowlist is
-  therefore exactly one endpoint, the model gateway. `Project.network =
-  "open"` keeps the old bridge networking for projects that need it (the
-  gateway is then reached at `host.docker.internal`). If the lockdown can't
-  be set up, gateway-mode tasks fail with a configuration error rather than
-  running unconfined.
+**Hosts.** Foreman's processes run natively on Linux and macOS; containers run
+on whatever Docker engine `DOCKER_HOST` names. `foreman.engine` resolves the
+socket (`FOREMAN_DOCKER_HOST`, `DOCKER_HOST`, the managed Lima VM's socket,
+the CLI default) and how containers reach the host: executors always use the
+name `host.docker.internal`, mapped with `--add-host` to `host-gateway` (Linux,
+Docker Desktop, OrbStack) or `192.168.5.2` (Lima, colima: on Lima
+`host-gateway` is the VM). The gateway binds only where containers arrive:
+the docker bridge address on Linux, loopback on macOS (`FOREMAN_GATEWAY_HOST`
+overrides; it used to be `0.0.0.0`). Every docker call, including the
+supervisor's kills, uses the resolved socket.
+
+**Lima VM** (`foreman vm start|stop|status|shell|delete`, `foreman.vm`): Lima's
+`docker-rootful` template, `vz` + virtiofs, mounting only `FOREMAN_DATA_DIR`,
+writable, at the same path (bind mounts resolve inside the VM). Rootful so
+containers write the task clone as the user's own uid. `foreman doctor` runs
+the real paths: engine, image, a container writing to the data dir, a
+container reaching the gateway address, and the isolated network.
+
+**Process groups on Darwin.** `group_alive` now asks `ps` where there is no
+`/proc`, and treats `EPERM` from `killpg` as dead: Darwin returns it for a
+group that holds only zombies, which made Stop and timeouts crash on macOS.
+
+**Egress (FR-4.6).** Each instance has an internal network
+`foreman-exec-<instance>` and a relay container `foreman-gw-<instance>` (socat,
+read-only, no capabilities) on that network and the default bridge,
+forwarding one port to the gateway. Executors, validation and acceptance run
+on the internal network and reach the gateway as `http://foreman-gw:8701`;
+nothing else resolves or routes. The relay carries no `foreman.run` label, so
+Stop and the orphan sweep leave it alone; it is recreated when the gateway
+port changes and removed when the orchestrator exits. `Project.network`
+("isolated" default, "open") is the per-project escape hatch. Existing
+projects become isolated on upgrade.
+
+**pi executor.** `foreman.executors.pi`: a generated `models.json` registers
+the gateway as provider `foreman` (`openai-completions`, dummy key, the
+node's context window); pi runs with `--mode json --no-session --offline`
+and every discovery feature off, including `AGENTS.md` (the context pack is
+the agent's whole context). pi exits 0 when model calls fail, so executors
+can now return an `OutputParser` that renders their raw output for the
+dashboard (raw JSONL stays in `execute.log`) and reports a failure after a 0
+exit. Executors declare `prompt_overhead_tokens`, measured from the first
+request each agent sends: pi ~1.4k (4 tools), OpenCode ~7.4k (9 tools); the
+context budget is now `pct × (window − overhead)`.
+
+### Validation coverage after M4 part 1
+
+| Check | Status |
+|---|---|
+| Full suite on macOS (Darwin process groups) | ✅ 8 previously failing stop/timeout tests pass; `tests/test_stop.py` uses `sandbox.alive_in_group` |
+| Engine detection and overrides | ✅ `tests/test_engine.py` |
+| Isolated network reaches only the gateway | ✅ `test_isolated_network_reaches_only_the_gateway` (host, IP and DNS targets unreachable; "open" unchanged) |
+| pi end to end | ✅ `test_executor_against_fake_model[pi]`, `test_spec_to_done_with_agent[pi]` (through the relay) |
+| pi loop tripped by the gateway | ✅ `test_pi_stuck_in_a_loop_is_stopped_by_the_watchdog` |
+| pi adapter and budgets | ✅ `tests/test_executors.py` |
+| Lima VM end to end | manual on a Mac: `foreman vm start && foreman doctor` (hosted macOS CI runners cannot run VMs) |
+
+### Known gaps
+
+- Hosted CI covers macOS without Docker only; Docker/Lima on a Mac is a manual check.
+- The relay forwards to the gateway port only; package registries during
+  agent runs need the "open" network (a registry allowlist is possible later).
+
+## 12. M4 part 2 implementation notes: multi-node, spend, portfolio, Aider, Claude
+
+- **Egress lockdown**: built on both lines of work at once; the merged code
+  uses part 1's design (§11: `foreman-exec-<instance>` network, `foreman-gw`
+  relay, `Project.network` "isolated" | "open"). Projects saved with this
+  line's earlier name for it, "gateway", are renamed to "isolated" on start.
 - **Toolchain images** (`images.py`, merged from the `local-node-and-toolchains`
   branch): `.foreman/Dockerfile` must build `FROM foreman/executor-base`
   (checked, so agents stay unprivileged). Only `.foreman/` is the build context.
@@ -390,12 +450,12 @@ Design changes made while building M1 (spec updated where relevant):
   `foreman claude-nodes` creates Opus / Sonnet / Haiku nodes with prices;
   `scripts/claude_smoke.py` runs a capped idea-to-done project against them.
 
-### Validation coverage after M4
+### Validation coverage after M4 part 2
 
 | Check | Status |
 |---|---|
 | V4.3 node capacity never exceeded | ✅ `test_node_capacity_respected`, `test_tasks_spread_over_nodes_up_to_capacity`, `test_planner_jobs_share_node_capacity` |
-| V4.4 executor containers can't reach other hosts | ✅ `test_network_modes[gateway]`: gateway reachable; internet, `host.docker.internal` and the bridge gateway are not (`tests/test_docker.py`) |
+| V4.4 executor containers can't reach other hosts | ✅ `test_isolated_network_reaches_only_the_gateway` (§11) |
 | Node health | ✅ `test_health_checks_mark_nodes_and_announce_changes`, `test_unhealthy_node_gets_no_tasks` |
 | V9.1 restart leaves nothing stuck | ✅ M1 tests plus `tests/test_recovery.py` (interrupted merge, dirty clone, wrong branch, acceptance) |
 | V10.1 spend cap → budget gate, cloud calls stop | ✅ `test_planner_spend_reaches_cap_and_waits_for_approval`, `test_priced_node_charges_and_stops_at_cap`, `test_tasks_on_priced_nodes_wait_at_the_cap`, `test_rejecting_the_budget_pauses_the_project`, `test_raising_the_cap_in_settings_clears_the_checkpoint` |
@@ -413,7 +473,7 @@ Design changes made while building M1 (spec updated where relevant):
   several projects across nodes.
 - GitHub Issues integration remains a future enhancement (spec §9).
 
-## 12. Strict agent roles (post-M4)
+## 13. Strict agent roles (post-M4)
 
 The single planner and single coding agent are replaced by four agents with
 fixed capabilities, managed by the (model-free) orchestrator. The design came
@@ -492,5 +552,5 @@ from a diagram by the project owner; the mermaid version is in
 | Result parsing and changed-line coverage | ✅ `tests/test_testresults.py` |
 | Old bindings map to the new roles | ✅ `test_role_bindings_fall_back_for_older_projects` |
 | Web research (local and Claude), private addresses refused | ✅ `tests/test_research.py` |
-| Real OpenCode, idea to done | ✅ `test_spec_to_done_with_opencode` (Docker) |
+| Real agents (pi, OpenCode), idea to done | ✅ `test_spec_to_done_with_agent[pi]`, `[opencode]` (Docker) |
 | Browser flow | ✅ `web/e2e/spec.spec.ts` (documents → five tasks → done) |

@@ -6,7 +6,8 @@ Speaks two APIs:
 
 Behaviour per chat request:
 - if the conversation already contains a tool result -> reply "Done." and stop;
-- else if a `write` tool is offered (OpenCode) -> call it once to create FILE_PATH;
+- else if a `write` tool is offered (OpenCode, pi) -> call it once to create FILE_PATH,
+  naming the path argument the way that tool's schema does (`filePath` / `path`);
 - else (planner calls, title generation...) -> reply with `planner(request)` if a
   planner function was given, otherwise a short fixed text.
 
@@ -44,6 +45,8 @@ def agent_write(req: dict[str, Any]) -> tuple[str, str]:
         m = re.search(r"# Task ([\w.-]+):", text)
         return f"tests/check_{(m.group(1) if m else 'task').lower()}.sh", CHECK
     return FILE_PATH, FILE_CONTENT
+
+
 CHUNK = 24
 
 Planner = Callable[[dict[str, Any]], str]
@@ -362,7 +365,9 @@ class FakeLLM:
 
     def decide(self, req: dict[str, Any]) -> tuple[dict[str, Any], str]:
         messages = req.get("messages", [])
-        tools = {t.get("function", {}).get("name") for t in req.get("tools") or []}
+        tools = {
+            t.get("function", {}).get("name"): t.get("function", {}) for t in req.get("tools") or []
+        }
         if "web_search" in tools and not any(m.get("role") == "tool" for m in messages):
             # A planner with research tools looks something up first.
             call = {
@@ -377,8 +382,10 @@ class FakeLLM:
         if any(m.get("role") == "tool" for m in messages):
             return {"role": "assistant", "content": "Done."}, "stop"
         if "write" in tools:
+            props = (tools["write"].get("parameters") or {}).get("properties") or {}
+            key = "path" if "path" in props else "filePath"
             path, content = agent_write(req)
-            args = json.dumps({"filePath": path, "content": content})
+            args = json.dumps({key: path, "content": content})
             call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "type": "function",

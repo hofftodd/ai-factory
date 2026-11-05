@@ -11,11 +11,12 @@ import json
 from pathlib import Path
 
 from foreman.core.models import Project, Task
-from foreman.executors.base import ExecutorInvocation
+from foreman.executors.base import ExecutorContext, ExecutorInvocation
 
 
 class ShellExecutor:
     kind = "shell"
+    prompt_overhead_tokens = 0
     needs_node = False
     providers: frozenset[str] = frozenset()
 
@@ -27,6 +28,7 @@ class ShellExecutor:
         model: str,
         ctl_dir: Path,
         prompt: str,
+        context: ExecutorContext | None = None,
         provider: str = "openai",
         role: str = "",
     ) -> ExecutorInvocation:

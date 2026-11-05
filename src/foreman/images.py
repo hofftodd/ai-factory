@@ -24,11 +24,11 @@ import hashlib
 import json
 import re
 import shlex
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 from foreman.config import get_settings
+from foreman.engine import docker, docker_env
 from foreman.sandbox import Proc, kill_handle
 
 DOCKERFILE = ".foreman/Dockerfile"
@@ -110,9 +110,7 @@ def project_dockerfile(workspace: Path) -> str | None:
 
 
 def base_image_id(base: str) -> str:
-    proc = subprocess.run(
-        ["docker", "image", "inspect", "-f", "{{.Id}}", base], capture_output=True, text=True
-    )
+    proc = docker("image", "inspect", "-f", "{{.Id}}", base)
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
@@ -122,7 +120,7 @@ def image_tag(project_id: int, dockerfile: str, base_id: str, sources: str = "")
 
 
 def image_exists(tag: str) -> bool:
-    return subprocess.run(["docker", "image", "inspect", tag], capture_output=True).returncode == 0
+    return docker("image", "inspect", tag).returncode == 0
 
 
 async def ensure_image(
@@ -171,6 +169,7 @@ async def _build(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         stdin=asyncio.subprocess.DEVNULL,
+        env=docker_env(),
         start_new_session=True,  # own process group, so Stop kills the whole build
     )
     build = Proc(f"local:{proc.pid}", proc)
