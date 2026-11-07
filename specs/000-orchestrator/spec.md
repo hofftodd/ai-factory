@@ -36,7 +36,9 @@ monitor, gate, or stop everything from the dashboard.
 ## 4. Environment & assumptions
 
 - Inference nodes (initial):
-  - **Mac Studio M5 Ultra, 256 GB** — large models; slow prompt prefill.
+  - **Mac Studio M5 Ultra, 256 GB** — large models (fully resident up to
+    ~200 GB); prompt prefill on par with or faster than the R9700 (measured
+    by ai-bench, Nov 2026).
   - **Mini PC with Radeon AI Pro R9700, 32 GB** — fast ~30B-class models.
 - Orchestrator, dashboard, supervisor and agent sandboxes run on one host,
   Linux (the mini PC) or macOS (the Mac Studio), and reach model servers over
