@@ -33,7 +33,13 @@ def test_interrupted_merge_is_aborted_on_restart(client, origin):
     git("checkout", "-q", branch, cwd=r)
     (r / "README.md").write_text("main\n")
     git("commit", "-qam", "main", cwd=r)
-    subprocess.run(["git", "merge", "side"], cwd=r, capture_output=True)
+    # Not the git() helper: the merge is meant to fail (conflict). An identity is
+    # needed even so, or git refuses before starting the merge on a bare CI runner.
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "side"],
+        cwd=r,
+        capture_output=True,
+    )
     assert (r / ".git" / "MERGE_HEAD").exists()
     (r / ".git" / "index.lock").write_text("")
 
