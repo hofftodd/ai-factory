@@ -39,7 +39,8 @@ jobs:
       - run: uv run pytest -q
 
   e2e:
-    runs-on: ubuntu-latest
+    # Playwright 1.56 can't install its browser on ubuntu-latest (26.04) yet.
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - uses: actions/checkout@v4
