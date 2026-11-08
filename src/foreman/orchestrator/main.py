@@ -7,7 +7,10 @@ Scheduling rules:
 - at most one active task per project (tasks merge into one milestone branch);
 - a node never runs more work (task attempts plus planner calls) than its capacity,
   and a node that failed its last health check gets none;
-- paid (priced) nodes get no work for a project at its spend cap.
+- paid (priced) nodes get no work for a project at its spend cap;
+- on ai-swap nodes, work waits rather than make a machine swap out a model that other
+  running work is using, and work whose model is already loaded goes first
+  (foreman.residency).
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from foreman import engine, gitops, sandbox
+from foreman import engine, gitops, residency, sandbox
 from foreman.config import get_settings
 from foreman.core import gates, roles, spend
 from foreman.core.models import (
@@ -189,8 +192,11 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
     by_id = {t.id: t for t in tasks}
     busy_projects = {t.project_id for t in tasks if t.state in ACTIVE_STATES}
     load = node_load()
+    busy_models = residency.in_use()
+    planned: dict[str, set[str]] = {}
+    max_wait = get_settings().swap_wait_s
 
-    ready = []
+    candidates = []
     for t in tasks:
         p = projects.get(t.project_id)
         if t.state != TaskState.QUEUED or t.hold or p is None or p.paused or p.clone_error:
@@ -214,12 +220,31 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
         # The first agent this attempt runs decides the node it needs.
         role = first_role(t) if executor and uses_pipeline(t, executor) else roles.BUILDER
         _, nid, model = resolve_executor(p, t, role)
+        candidates.append((t, p, needs_node, nid, model))
+
+    # Work whose model is already loaded goes first: it starts without a swap.
+    candidates.sort(
+        key=lambda c: not (c[2] and c[3] is not None and residency.warm(nodes.get(c[3]), c[4]))
+    )
+    ready = []
+    for t, p, needs_node, nid, model in candidates:
+        if t.project_id in busy_projects:
+            continue
         if needs_node and nid is not None:
-            if not node_available(nodes.get(nid), load):
+            n = nodes.get(nid)
+            if not node_available(n, load):
                 continue
-            if spend.priced(nodes.get(nid)) and spend.over_cap(p):
+            if spend.priced(n) and spend.over_cap(p):
+                continue
+            reason = residency.blocker(n, model, busy_models, planned)
+            assert t.id is not None
+            waiting, first = residency.hold("task", t.id, reason, max_wait)
+            if waiting:
+                if first:
+                    emit(t.project_id, t.id, "system", f"waiting to start: {reason}")
                 continue
             load[nid] = load.get(nid, 0) + 1
+            residency.reserve(planned, n, model)
         busy_projects.add(t.project_id)
         ready.append((t, nid, model))
     return ready
@@ -236,6 +261,7 @@ class Orchestrator:
         self.gateway_server: Any = None
         self.gateway_port = 0
         self._health: asyncio.Task[None] | None = None
+        self._residency: asyncio.Task[None] | None = None
         self._last_health = 0.0
         self._stop = asyncio.Event()
 
@@ -311,6 +337,7 @@ class Orchestrator:
         if estop_active():
             return
         self.start_health_checks()
+        self.start_residency()
         self.start_jobs()
         self.start_acceptance()
         for task, node_id, model in pick_ready():
@@ -334,6 +361,8 @@ class Orchestrator:
             projects = {p.id: p for p in s.exec(select(Project))}
             nodes = {n.id: n for n in s.exec(select(Node))}
         load = node_load()
+        busy_models = residency.in_use()
+        planned: dict[str, set[str]] = {}
         for job in queued:
             assert job.id is not None
             if job.project_id in busy or job.project_id in self.jobs:
@@ -348,9 +377,24 @@ class Orchestrator:
                     continue
                 if spend.priced(nodes.get(nid)) and spend.over_cap(projects[job.project_id]):
                     continue
+                model = binding.get("model", "")
+                reason = residency.blocker(nodes.get(nid), model, busy_models, planned)
+                waiting, first = residency.hold("job", job.id, reason, self.settings.swap_wait_s)
+                if waiting:
+                    if first:
+                        emit(job.project_id, None, "system", f"planner waiting: {reason}")
+                    continue
                 load[nid] = load.get(nid, 0) + 1
+                residency.reserve(planned, nodes.get(nid), model)
             busy.add(job.project_id)
             self.jobs[job.project_id] = asyncio.create_task(JobRunner(job.id).run())
+
+    def start_residency(self) -> None:
+        """Re-read ai-swap nodes' loaded models every few seconds, in the background."""
+        if self._residency is not None and not self._residency.done():
+            return
+        if residency.due():
+            self._residency = asyncio.create_task(residency.refresh())
 
     def start_health_checks(self) -> None:
         """Check every node in the background, every NODE_CHECK_S seconds (0 = never)."""

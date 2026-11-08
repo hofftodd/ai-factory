@@ -61,6 +61,13 @@ large budget: its answers are long).
 
 - **Memory on the Mac:** ds4-q4 (153 GB) + flint (23 GB) is 176 GB of 256 GB,
   leaving room for KV caches. Not yet load-tested with both busy at once.
+- **One endpoint, swap-aware:** with ai-swap on both machines (Nov 2026), every
+  model is reachable through either machine's endpoint (`http://studio.local:8080/v1`
+  or `http://mini-ubuntu.local:8080/v1`), so nodes can be "one node per model" on
+  the same URL, each with its own capacity and context window. Foreman reads
+  ai-swap's status and won't start work that would swap out a model a running
+  step is using; the bindings above fit together on each machine, so they never
+  wait for each other.
 - **Persistent servers:** ai-bench starts and stops each server per run. Foreman
   needs them always up, so ds4-server and oMLX need LaunchAgents on the Mac.
 - **Sampling is set on the servers, not in Foreman.** Foreman's gateway passes

@@ -328,6 +328,7 @@ its Settings; nothing else changes.
 | `FOREMAN_GATEWAY_HOST` / `_PORT` | `auto` / `8701` | Model gateway. `auto` listens only where containers arrive: the docker bridge address on Linux, loopback on macOS. Every URL also carries a per-run secret |
 | `FOREMAN_CONTAINER_HOST_IP` | `auto` | What `host.docker.internal` maps to inside containers: `host-gateway`, or Lima's host address (`192.168.5.2`) on Lima |
 | `FOREMAN_NODE_CHECK_S` | `60` | Seconds between node health checks (`0` disables them) |
+| `FOREMAN_SWAP_WAIT_S` | `1800` | On [ai-swap](https://github.com/hofftodd/ai-swap) nodes, the longest a task step or planner call waits rather than make a machine swap out a model other running work is using (`0` = no limit) |
 | `FOREMAN_SEARCH_URL` | *(empty)* | A [SearXNG](https://docs.searxng.org/) instance (JSON API) for the Project Planner's web research on local models. Claude uses its own web search |
 
 ## Architecture

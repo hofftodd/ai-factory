@@ -20,7 +20,7 @@ from sqlalchemy import delete
 from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
-from foreman import github, gitops
+from foreman import github, gitops, residency
 from foreman.api.inbox import router as inbox_router
 from foreman.api.schemas import (
     ControlRequest,
@@ -626,6 +626,17 @@ async def task_diff(task_id: int) -> dict[str, Any]:
 
 
 # -- nodes -----------------------------------------------------------------
+
+
+@router.post("/api/residency/conflicts")
+async def residency_conflicts(body: dict[str, Any]) -> dict[str, list[str]]:
+    """Role bindings whose models share an ai-swap machine but don't fit in it together
+    (each hand-over between those agents would swap models). Takes unsaved bindings, so
+    the settings form can warn while you edit."""
+    bindings = body.get("role_bindings") or {}
+    if not isinstance(bindings, dict):
+        raise HTTPException(400, "role_bindings must be an object")
+    return {"warnings": await residency.binding_conflicts(bindings)}
 
 
 @router.get("/api/nodes")

@@ -31,6 +31,9 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("FOREMAN_NODE_CHECK_S", "0")  # tests call check_nodes() themselves
     monkeypatch.delenv("FOREMAN_TOKEN", raising=False)
     reset_engine_cache()
+    from foreman import residency
+
+    residency.reset()
     return data
 
 

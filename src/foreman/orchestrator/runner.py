@@ -634,15 +634,27 @@ class TaskRunner:
 
     async def _next_run(self, role: str, project: Project, task: Task) -> None:
         """Hand over to the next agent: a new run, on its own node and gateway token."""
+        from foreman import residency
         from foreman.orchestrator.main import node_available, node_load
 
         finish_run(self.run_id, RunState.SUCCEEDED, "step done")
         _, node_id, model = resolve_executor(project, task, role)
-        while node_id is not None:  # wait for a free slot on the next agent's node
+        # Wait for a free slot on the next agent's node, and (on ai-swap nodes) until its
+        # model can load without swapping out a model other running work is using.
+        while node_id is not None:
             with session() as s:
                 node = s.get(Node, node_id)
-            if node is None or node_available(node, node_load()):
+            if node is None:
                 break
+            if node_available(node, node_load()):
+                reason = residency.blocker(node, model, residency.in_use())
+                waiting, first = residency.hold(
+                    "step", self.task_id, reason, self.settings.swap_wait_s
+                )
+                if not waiting:
+                    break
+                if first:
+                    emit(task.project_id, self.task_id, "system", f"{role} waiting: {reason}")
             self._check()
             await asyncio.sleep(1)
         with session() as s:

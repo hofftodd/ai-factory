@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { control, del, patch, post } from "../api";
 import { ActionButton, ErrorNote, EventLog, Field, StateBadge, StopButton, lines } from "../components";
@@ -214,6 +214,25 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     node_id: x.node_id ? Number(x.node_id) : null,
     model: x.model,
   });
+  // Warn while editing when two agents' models share an ai-swap machine but don't fit together.
+  const [swapWarnings, setSwapWarnings] = useState<string[]>([]);
+  const bindingKey = JSON.stringify([projectPlanner, taskPlanner, tester, builder, escalation]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      post<{ warnings: string[] }>("/api/residency/conflicts", {
+        role_bindings: {
+          project_planner: toBinding(projectPlanner),
+          task_planner: toBinding(taskPlanner),
+          tester: toBinding(tester),
+          builder: toBinding(builder),
+          escalation: toBinding(escalation),
+        },
+      })
+        .then((r) => setSwapWarnings(r.warnings))
+        .catch(() => setSwapWarnings([]));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [bindingKey]);
   return (
     <form
       className="card form"
@@ -270,6 +289,13 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
           </select>
         </Field>
       </div>
+      {swapWarnings.map((w) => (
+        <div className="swap-note" key={w} role="note">
+          <b>Model swaps:</b> {w} Foreman runs those agents one after the other rather than
+          side by side, so this costs time, not correctness. A model that fits next to the
+          others, or one on another machine, avoids it.
+        </div>
+      ))}
       <h3>Tasks</h3>
       <div className="grid2">
         <Field label="Max files per task">

@@ -332,6 +332,28 @@ Each node has a **capacity**: how many task steps and planning calls it
 serves at once. Work waits for a free slot. Foreman checks every node's
 health once a minute and gives no new work to one that is down.
 
+**Avoiding model swaps.** When a node is an
+[ai-swap](https://github.com/hofftodd/ai-swap) endpoint, several models share
+each machine's memory and are loaded on demand. An agent's step sends many
+requests with pauses between them while its tools run, and ai-swap only
+protects a model while a request is in flight. Two steps on one machine whose
+models don't fit together would swap each other out on almost every turn
+(about 25 s each on a 32 GB GPU, minutes for a 150 GB model). Foreman knows a
+step uses its model from start to finish, so every few seconds it reads which
+models each machine has loaded (`foreman/residency.py`) and:
+
+- starts work whose model is loaded, or fits in free memory, as usual;
+- holds back work whose model would push out a model that a running step or
+  planner call is using (working out the victim the way ai-swap does: idle
+  models, least recently used first), with one event in the activity feed
+  saying which model and project it is waiting for;
+- starts work whose model is already loaded first;
+- after `FOREMAN_SWAP_WAIT_S` (30 minutes) of waiting, starts anyway.
+
+A project's Settings page also warns when two of its agents' models share a
+machine but don't fit in it together, since each hand-over between them would
+then swap models. Nodes that aren't ai-swap endpoints are unaffected.
+
 The planners are called directly by the orchestrator. The Project
 Planner's web research uses Claude's built-in web search when it runs on
 Claude; on a local model it uses a search server you point Foreman at

@@ -54,6 +54,9 @@ class Settings:
     search_url: str = field(default_factory=lambda: _env("SEARCH_URL", ""))
     # How often the orchestrator checks each node's health.
     node_check_s: float = field(default_factory=lambda: float(_env("NODE_CHECK_S", "60")))
+    # Longest a task step or planner call waits rather than make an ai-swap machine swap out
+    # a model other running work is using (foreman.residency). 0 = wait as long as it takes.
+    swap_wait_s: float = field(default_factory=lambda: float(_env("SWAP_WAIT_S", "1800")))
 
     @property
     def db_path(self) -> Path:
