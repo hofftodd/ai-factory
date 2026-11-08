@@ -40,9 +40,19 @@ monitor, gate, or stop everything from the dashboard.
     ~200 GB); prompt prefill on par with or faster than the R9700 (measured
     by ai-bench, Nov 2026).
   - **Mini PC with Radeon AI Pro R9700, 32 GB** — fast ~30B-class models.
-- Orchestrator, dashboard, supervisor and agent sandboxes run on one host,
-  Linux (the mini PC) or macOS (the Mac Studio), and reach model servers over
-  the LAN via OpenAI-compatible endpoints.
+  - Both run [ai-swap](https://github.com/hofftodd/ai-swap) as peers, so
+    every model on either machine is reachable through either machine's
+    endpoint, loaded on demand.
+- Orchestrator, dashboard, supervisor and agent sandboxes run together on one
+  host, which reaches model servers over the LAN via OpenAI-compatible
+  endpoints. The host can be either model machine — Linux (the mini PC) or
+  macOS (the Mac Studio) — or, preferably, a separate machine, so agent
+  containers don't compete with models for memory and CPU and Stop works even
+  if a model host hangs. Such a host needs Linux with Docker, roughly 8+ cores,
+  32+ GB of RAM and a fast SSD for clones and toolchain images.
+- The agent containers must run on the orchestrator's host: they bind-mount
+  each task's clone, briefing and results folder from Foreman's data
+  directory, and reach the model gateway through the Docker host address.
 - Cloud providers (Anthropic, OpenAI, …) are optional per role.
 - A Docker engine is available to the orchestrator host: dockerd on Linux; on
   macOS a Linux VM, by default a Lima VM that Foreman manages itself
