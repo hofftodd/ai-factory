@@ -105,7 +105,7 @@ over-budget ⇒ the task is returned to the planner to split.
 
 ## 6. Milestones
 
-### M0 — Spike (no app code) — skipped by decision; model choice deferred to real use
+### M0 — Spike (no app code) — skipped by decision; replaced by ai-bench measurements ([spike-notes.md](spike-notes.md))
 Manually run Spec Kit-style spec → decomposition → OpenCode/Aider on the R9700
 and Mac against a toy repo. Record: which models follow tool protocols, real
 usable context, tokens/s, typical failure modes. Output: `specs/000-orchestrator/spike-notes.md`
@@ -142,8 +142,8 @@ and default role bindings.
 
 | Risk | Mitigation |
 |---|---|
-| Local executors unreliable at tool use | M0 spike picks models; escalation ladder; tiny tasks |
-| Mac prefill latency | Small context packs; Mac reserved for planner/escalation |
+| Local executors unreliable at tool use | Measured: flint 96.3%, ThinkingCap 98.1%, DeepSeek V4 Flash 100% on ai-bench terminal-x3, no malformed tool calls ([spike-notes.md](spike-notes.md)); escalation ladder; tiny tasks |
+| Mac prefill latency | Retired: measured on par with or faster than the R9700 (flint on oMLX 5,245 tok/s at 8k, 1.6 s to first token; DeepSeek V4 Flash ~9 s). The Mac now hosts the builders too. |
 | Replanner churn | Growth cap, reasons required, spec-change gate |
 | Validation tests themselves wrong | Phase 1 human approval; tests changes always gated |
 | Executor CLI interface drift | `Executor` protocol + pinned versions + contract tests |

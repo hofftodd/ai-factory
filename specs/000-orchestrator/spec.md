@@ -59,7 +59,7 @@ monitor, gate, or stop everything from the dashboard.
 | Validation test | An executable test (or command) that defines part of "done". |
 | Task | A small unit of work with its own requirement slice, todos, allowed files and validation command. |
 | Context pack | The exact material handed to an executor for one task. |
-| Role | planner, reviewer, executor, escalation — each bound to a model endpoint. |
+| Role | project planner, task planner, tester, builder, escalation — each bound to a model endpoint (defaults in [spike-notes.md](spike-notes.md)). |
 | Node | An inference endpoint with a concurrency capacity. |
 | Gate | A configurable checkpoint where the project waits for user approval. |
 | Watchdog | Rules that detect looping, drift, scope violations and budget overruns. |
@@ -208,7 +208,7 @@ monitor, gate, or stop everything from the dashboard.
 
 ## 8. Open questions
 
-- OQ-1 Exact default models per role — decided during the M0 spike.
+- ~~OQ-1 Exact default models per role~~ — resolved from ai-bench measurements (Nov 2026) in [spike-notes.md](spike-notes.md): planners and escalation on DeepSeek V4 Flash (Mac), builder on flint (Mac, oMLX), tester on ThinkingCap-Qwen3.8-27B (R9700).
 
 ## 9. Future enhancements (out of scope for v1)
 
