@@ -127,6 +127,32 @@ def test_models_already_loaded_need_no_swap(client):
     assert residency.blocker(node(nid), "thinkingcap", {("gpu", "thinkingcap"): "x"}) == ""
 
 
+def test_reserved_machine_makes_work_wait(client):
+    nid = add_node(client)
+    cluster(32, thinkingcap=("ready", 30, "1"))
+    residency._views[SWAP].machines["gpu"].reserved = "ai-bench@mini (run 7)"
+    assert (
+        residency.blocker(node(nid), "thinkingcap", {})
+        == "gpu is reserved by ai-bench@mini (run 7)"
+    )
+    assert not residency.warm(node(nid), "thinkingcap")
+
+
+def test_parse_reads_the_reservation():
+    status = {
+        "node": {
+            "name": "gpu",
+            "memory_budget_gb": 32,
+            "models": [],
+            "lock": {"owner": "ai-bench@mini", "reason": "run 7"},
+        },
+        "peers": [],
+    }
+    assert (
+        residency._parse(status, {"data": []}).machines["gpu"].reserved == "ai-bench@mini (run 7)"
+    )
+
+
 def test_plain_nodes_are_left_alone(client):
     r = client.post("/api/nodes", json={"name": "plain", "base_url": "http://127.0.0.1:9/v1"})
     n = node(r.json()["id"])

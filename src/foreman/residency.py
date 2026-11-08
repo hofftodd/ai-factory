@@ -56,6 +56,8 @@ class Machine:
     name: str
     budget_gb: float
     models: dict[str, ModelState] = field(default_factory=dict)
+    # Set while someone (e.g. an ai-bench run) has reserved the machine: "owner (reason)".
+    reserved: str = ""
 
 
 @dataclass
@@ -102,6 +104,10 @@ def _parse(status: dict[str, Any], models: dict[str, Any]) -> View:
         if not n.get("name"):
             continue
         m = Machine(n["name"], float(n.get("memory_budget_gb") or 0))
+        if lock := n.get("lock"):
+            m.reserved = lock.get("owner", "someone") + (
+                f" ({lock['reason']})" if lock.get("reason") else ""
+            )
         for x in n.get("models") or []:
             m.models[x["name"]] = ModelState(
                 x["name"],
@@ -246,6 +252,8 @@ def blocker(
     p = placement(node, model)
     if p is None:
         return ""
+    if p.machine.reserved:
+        return f"{p.machine.name} is reserved by {p.machine.reserved}"
     mine = (planned or {}).get(p.machine.name, set())
     evicted, fits = would_evict(p, mine)
     hit = [x for x in evicted if (p.machine.name, x.name) in busy]
@@ -260,7 +268,7 @@ def blocker(
 def warm(node: Node | None, model: str) -> bool:
     """The model is loaded (or loading) on its machine: no swap needed."""
     p = placement(node, model)
-    return p is None or p.loaded
+    return p is None or (p.loaded and not p.machine.reserved)
 
 
 def reserve(planned: dict[str, set[str]], node: Node | None, model: str) -> None:
