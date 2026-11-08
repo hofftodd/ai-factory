@@ -346,6 +346,7 @@ async def create_project(body: ProjectCreate) -> Project:
         watchdog=body.watchdog,
         spend_cap_usd=body.spend_cap_usd,
         min_task_coverage=body.min_task_coverage,
+        test_note=body.test_note.strip(),
     )
     with session() as s:
         s.add(p)

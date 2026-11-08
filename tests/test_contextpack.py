@@ -155,3 +155,22 @@ def test_packs_show_the_toolchain_image(tmp_path):
         pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
         assert "## Toolchain image" in pack.text and "pytest --version" in pack.text
         assert "`.foreman/` is read-only to you" in pack.text
+
+
+def test_testers_see_how_the_project_runs_its_tests(tmp_path):
+    repo = _repo(tmp_path)
+    project = Project(
+        name="p", repo_url="x", test_note="make test (pytest); CI runs pytest -n auto"
+    )
+    setup = Task(project_id=1, key="SETUP", title="Project setup", kind="setup", req_refs=[])
+    feature = Task(project_id=1, key="T1", title="Add", req_refs=[])
+    pack = build_role_pack(project, setup, repo, "tester", docs={}, test_paths=["tests"])
+    assert "## How tests run in this project (from the user)" in pack.text
+    assert "CI runs pytest -n auto" in pack.text and "thin wrapper" in pack.text
+    pack = build_role_pack(project, feature, repo, "tester", docs={}, test_paths=["tests"])
+    assert "CI runs pytest -n auto" in pack.text and "thin wrapper" not in pack.text
+    pack = build_role_pack(project, feature, repo, "builder", docs={}, test_paths=["tests"])
+    assert "from the user" not in pack.text  # the Builder runs tests/run.sh, nothing else
+    plain = Project(name="p", repo_url="x")
+    pack = build_role_pack(plain, setup, repo, "tester", docs={}, test_paths=["tests"])
+    assert "from the user" not in pack.text

@@ -95,6 +95,13 @@ def system_prompt(
         f"Only files under `{roles.ENV_DIR}/` are accepted. After the blocks, list in one "
         "or two sentences what the image provides.",
     ]
+    if project.test_note.strip():
+        parts += [
+            "",
+            "## How this project's tests run (from the user)",
+            project.test_note.strip(),
+            "Install everything that needs, so `tests/run.sh` can wrap it.",
+        ]
     if note:
         parts += ["", "## Requested by the user", note]
     if current:

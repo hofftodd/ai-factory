@@ -300,12 +300,30 @@ RESULTS_CONTRACT = [
     "`tests/run.sh` runs the whole test suite except the acceptance tests "
     "(`tests/acceptance/`, which run through their own `tests/acceptance/run.sh`). It must "
     "exit non-zero when any test fails and write, into the directory `$FOREMAN_RESULTS`:",
-    "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, "
-    "gotestsum);",
+    "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, gotestsum);",
     "- `coverage.xml` (Cobertura) or `lcov.info`: line coverage of the project's code.",
     "There is no internet access: use only what the toolchain image provides.",
     "",
 ]
+
+
+def test_note_lines(project: Project, setup: bool = False) -> list[str]:
+    """The user's note on how the project's tests already run, for the Tester."""
+    note = project.test_note.strip()
+    if not note:
+        return []
+    out = ["## How tests run in this project (from the user)", note]
+    if setup:
+        out.append(
+            "Make `tests/run.sh` a thin wrapper around that: run the tests the way the note "
+            "says, adding only what the contract above needs (JUnit XML and coverage written "
+            "to `$FOREMAN_RESULTS`, and leaving `tests/acceptance/` out). Don't build a "
+            "second, different way of running the tests."
+        )
+    else:
+        out.append("Put new tests where that command runs them.")
+    return [*out, ""]
+
 
 KIND_NOTES = {
     "tester": {
@@ -409,17 +427,20 @@ def build_role_pack(
             "",
         ]
     else:
-        config = "" if task.kind == "setup" else (
-            " Do not change the test configuration either (`conftest.py`, `pytest.ini`, the "
-            "pytest or coverage sections of `pyproject.toml`, jest or vitest config and the "
-            "like): such changes are rejected."
+        config = (
+            ""
+            if task.kind == "setup"
+            else (
+                " Do not change the test configuration either (`conftest.py`, `pytest.ini`, the "
+                "pytest or coverage sections of `pyproject.toml`, jest or vitest config and the "
+                "like): such changes are rejected."
+            )
         )
         lines += [
             "You are the Builder Agent. Write the code that makes this task's tests pass, "
             "without breaking the rest of the test suite.",
             f"You may change any file except the tests ({test_dirs}) and the toolchain image "
-            "(`.foreman/`), which are read-only: you can run the tests but not edit them."
-            + config,
+            "(`.foreman/`), which are read-only: you can run the tests but not edit them." + config,
             "If another test contradicts this task's tests, so that both can never pass, do "
             "not work around it: never skip, deselect or special-case a test. Write which tests "
             "conflict and why into `$FOREMAN_RESULTS/tests-conflict.md` and finish; the task "
@@ -468,6 +489,8 @@ def build_role_pack(
             "",
         ]
     lines += RESULTS_CONTRACT
+    if role == "tester":
+        lines += test_note_lines(project, setup=task.kind == "setup")
     lines += ["Run the suite with `sh tests/run.sh`.", ""]
     if failing_acceptance:
         lines += [

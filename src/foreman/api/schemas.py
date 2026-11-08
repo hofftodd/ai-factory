@@ -30,6 +30,8 @@ class ProjectCreate(BaseModel):
     watchdog: dict[str, Any] = Field(default_factory=dict)
     spend_cap_usd: float = Field(default=0.0, ge=0)
     min_task_coverage: int = Field(default=80, ge=0, le=100)
+    # How the project's tests already run (see Project.test_note).
+    test_note: str = Field(default="", max_length=2000)
 
 
 class ProjectUpdate(BaseModel):
@@ -46,6 +48,7 @@ class ProjectUpdate(BaseModel):
     spend_cap_usd: float | None = Field(default=None, ge=0)
     min_task_coverage: int | None = Field(default=None, ge=0, le=100)
     test_paths: list[str] | None = None
+    test_note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskCreate(BaseModel):

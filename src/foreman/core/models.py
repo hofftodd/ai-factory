@@ -103,6 +103,10 @@ class Project(SQLModel, table=True):
     # Unused: the suite is the Tester's tests/run.sh. Kept because older databases have
     # this column as NOT NULL without a default.
     test_cmd: str = ""
+    # How this project's tests already run, in the user's words (e.g. "make test; CI runs
+    # pytest -n auto"). Not a command Foreman runs: the Environment Agent installs what it
+    # needs and the Tester makes tests/run.sh a thin wrapper around it.
+    test_note: str = ""
     executor_kind: str = "pi"
     # Executor network: "isolated" (only the model gateway is reachable) or "open"
     # (LAN and internet, for tests that need them). See foreman.sandbox. Older rows

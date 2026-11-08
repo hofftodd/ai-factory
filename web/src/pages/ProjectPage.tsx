@@ -229,6 +229,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     spend_cap_usd: project.spend_cap_usd,
     min_task_coverage: project.min_task_coverage,
     test_paths: project.test_paths.join(", "),
+    test_note: project.test_note ?? "",
   });
   const [error, setError] = useState("");
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
@@ -271,6 +272,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
             spend_cap_usd: f.spend_cap_usd,
             min_task_coverage: f.min_task_coverage,
             test_paths: f.test_paths.split(",").map((x) => x.trim()).filter(Boolean),
+            test_note: f.test_note.trim(),
             gates: { ...project.gates, plan_approval: f.plan_approval, ...g },
             watchdog: { ...project.watchdog, ...w },
             role_bindings: {
@@ -338,6 +340,9 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
           <input className="mono" value={f.test_paths} onChange={(e) => set("test_paths", e.target.value)} />
         </Field>
       </div>
+      <Field label="How tests run here" hint="Optional. For a project whose tests already run a certain way, e.g. “make test; CI runs pytest -n auto”. The Environment Agent installs what it needs and the Tester makes tests/run.sh wrap it.">
+        <textarea rows={2} maxLength={2000} value={f.test_note} placeholder="e.g. make test (pytest); CI runs pytest -n auto" onChange={(e) => set("test_note", e.target.value)} />
+      </Field>
       <h3>Spend</h3>
       <div className="grid2">
         <Field label="Spend cap (USD)" hint={`Paid (cloud) model calls stop here and ask you. 0 = no cap. Spent so far: $${project.spend_usd.toFixed(2)}`}>

@@ -49,6 +49,7 @@ export interface Project {
   spend_usd: number;
   spend_cap_usd: number;
   min_task_coverage: number;
+  test_note: string;
   test_paths: string[];
   coverage?: number | null;
   created_at: number;

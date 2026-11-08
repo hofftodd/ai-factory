@@ -194,3 +194,15 @@ def test_tester_and_builder_may_not_touch_the_toolchain():
     changed = [".foreman/Dockerfile", "src/app.py", "tests/test_app.py"]
     assert roles.fence(p, roles.BUILDER, changed) == [".foreman/Dockerfile", "tests/test_app.py"]
     assert roles.fence(p, roles.TESTER, changed) == [".foreman/Dockerfile", "src/app.py"]
+
+
+def test_environment_agent_is_told_how_tests_run():
+    project = Project(name="p", repo_url="x", test_note="npm test (vitest)")
+    prompt = environment.system_prompt(project, {}, [], {}, "")
+    assert (
+        "## How this project's tests run (from the user)" in prompt
+        and "npm test (vitest)" in prompt
+    )
+    assert "## How this project's tests run" not in environment.system_prompt(
+        Project(name="p", repo_url="x"), {}, [], {}, ""
+    )
