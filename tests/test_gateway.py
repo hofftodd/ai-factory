@@ -39,8 +39,9 @@ def make_run(
 ) -> TaskRun:
     with session() as s:
         node = Node(name="n", base_url=llm.url, api_key=api_key)
-        p = Project(name="p", repo_url="x", watchdog=watchdog or {},
-                    role_bindings=role_bindings or {})
+        p = Project(
+            name="p", repo_url="x", watchdog=watchdog or {}, role_bindings=role_bindings or {}
+        )
         s.add(node)
         s.add(p)
         s.commit()
@@ -48,7 +49,11 @@ def make_run(
         s.add(t)
         s.commit()
         run = TaskRun(
-            task_id=t.id, project_id=p.id, node_id=node.id, model="m", gateway_token=new_token(),
+            task_id=t.id,
+            project_id=p.id,
+            node_id=node.id,
+            model="m",
+            gateway_token=new_token(),
             step=step,
         )
         s.add(run)
@@ -99,8 +104,10 @@ async def _a(fn, *args):
 
 
 async def test_each_agent_role_asks_for_its_reasoning_effort(gw, llm):
-    bindings = {"builder": {"node_id": 1, "model": "m", "reasoning_effort": "medium"},
-                "tester": {"node_id": 1, "model": "m"}}
+    bindings = {
+        "builder": {"node_id": 1, "model": "m", "reasoning_effort": "medium"},
+        "tester": {"node_id": 1, "model": "m"},
+    }
     builder = make_run(llm, role_bindings=bindings, step="builder")
     assert (await _a(chat, gw, builder)).status_code == 200
     assert llm.requests[-1]["chat_template_kwargs"] == {"reasoning_effort": "medium"}
@@ -112,10 +119,14 @@ async def test_each_agent_role_asks_for_its_reasoning_effort(gw, llm):
 def test_an_escalated_task_uses_the_escalation_models_effort():
     from foreman.core import roles
 
-    p = Project(name="p", repo_url="x", role_bindings={
-        "builder": {"node_id": 1, "model": "small", "reasoning_effort": "medium"},
-        "escalation": {"node_id": 2, "model": "big", "reasoning_effort": "xhigh"},
-    })
+    p = Project(
+        name="p",
+        repo_url="x",
+        role_bindings={
+            "builder": {"node_id": 1, "model": "small", "reasoning_effort": "medium"},
+            "escalation": {"node_id": 2, "model": "big", "reasoning_effort": "xhigh"},
+        },
+    )
     assert roles.reasoning_effort(p, Task(project_id=1, title="t"), "builder") == "medium"
     escalated = Task(project_id=1, title="t", node_id=2, model="big")
     assert roles.reasoning_effort(p, escalated, "builder") == "xhigh"

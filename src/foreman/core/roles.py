@@ -216,8 +216,16 @@ def fence(project: Project, role: str, changed: list[str]) -> list[str]:
 
 # Files that only configure how tests run...
 TEST_CONFIG_FILES = (
-    "conftest.py", "pytest.ini", ".coveragerc", ".rspec", ".mocharc.*", ".nycrc*",
-    "jest.config.*", "vitest.config.*", "karma.conf.*", "phpunit.xml*",
+    "conftest.py",
+    "pytest.ini",
+    ".coveragerc",
+    ".rspec",
+    ".mocharc.*",
+    ".nycrc*",
+    "jest.config.*",
+    "vitest.config.*",
+    "karma.conf.*",
+    "phpunit.xml*",
 )
 # ...and the test sections of files that configure other things too.
 TEST_CONFIG_SECTIONS = {
@@ -272,7 +280,6 @@ def _dig(data: Any, path: list[str]) -> Any:
             return None
         data = data.get(key)
     return data
-
 
 
 def denied(project_id: int, task_id: int | None, role: str, what: str, **data: Any) -> None:

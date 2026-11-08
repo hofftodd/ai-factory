@@ -551,7 +551,8 @@ class TaskRunner:
             code = await self._step("validate", ["bash", "-lc", cmd], {}, "test", task.timeout_s)
             if code != 0:
                 raise StepFailed(
-                    f"validate failed (exit {code}): {cmd}", "\n".join(self._tail),
+                    f"validate failed (exit {code}): {cmd}",
+                    "\n".join(self._tail),
                     kind="validation",
                 )
             self._emit("test", "validate passed", step="validate", passed=True)
@@ -756,8 +757,11 @@ class TaskRunner:
         outside = roles.fence(project, role, changed)
         if role == roles.BUILDER and task.kind != "setup":
             outside += [
-                f for f in changed
-                if f not in outside and roles.is_test_config(f) and roles.test_config_changed(
+                f
+                for f in changed
+                if f not in outside
+                and roles.is_test_config(f)
+                and roles.test_config_changed(
                     f, gitops.file_at(clone, start, f), gitops.file_at(clone, "HEAD", f)
                 )
             ]
@@ -801,8 +805,11 @@ class TaskRunner:
                 "none of this task's new tests fail: they already pass against the current "
                 "code, so they don't test what this task must change. Write tests that fail "
                 "until the task is built"
-                + (", against the calls the failing acceptance tests make"
-                   if self._failing_acceptance(task) else ""),
+                + (
+                    ", against the calls the failing acceptance tests make"
+                    if self._failing_acceptance(task)
+                    else ""
+                ),
                 kind="no_red",
             )
         if task.kind == "acceptance" and self.acceptance_in_suite:
@@ -1082,7 +1089,8 @@ class TaskRunner:
                 "",
             ]
             code = {
-                f for f in gitops.changed_since(clone, gitops.BASE_REF)
+                f
+                for f in gitops.changed_since(clone, gitops.BASE_REF)
                 if not roles.is_test_path(project, f)
             }
             thin = sorted(

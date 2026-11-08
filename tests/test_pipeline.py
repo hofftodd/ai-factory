@@ -377,14 +377,24 @@ async def test_repair_tasks_hear_which_acceptance_tests_fail(client, origin):
         run = TestRun(project_id=p["id"], step="acceptance", passed=3, failed=1)
         s.add(run)
         s.commit()
-        s.add(TestCase(test_run_id=run.id, name="test_shares", classname="tests.acceptance.t",
-                       status="failed", message="expected a (name, cents) pair, got int"))
+        s.add(
+            TestCase(
+                test_run_id=run.id,
+                name="test_shares",
+                classname="tests.acceptance.t",
+                status="failed",
+                message="expected a (name, cents) pair, got int",
+            )
+        )
         s.commit()
-    fix = scripts(tester=RUNNER + "echo 'test -f fixed.txt' > tests/check_fixed.sh\n",
-                  builder="echo fixed > fixed.txt\n")
+    fix = scripts(
+        tester=RUNNER + "echo 'test -f fixed.txt' > tests/check_fixed.sh\n",
+        builder="echo fixed > fixed.txt\n",
+    )
     repair = add_task(client, p["id"], fix, origin="replan")
-    await drive(Orchestrator(), lambda: all(task(x["id"]).state in TERMINAL
-                                            for x in (repair, planned)))
+    await drive(
+        Orchestrator(), lambda: all(task(x["id"]).state in TERMINAL for x in (repair, planned))
+    )
     tester, builder = runs_of(repair["id"])
     assert "`tests.acceptance.t::test_shares`: expected a (name, cents) pair" in pack_of(tester)
     assert "fail now for the same reason" in pack_of(tester)

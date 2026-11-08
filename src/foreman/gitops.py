@@ -131,8 +131,15 @@ def sync_task_clone(project_id: int, task_id: int, milestone_branch: str) -> boo
     merged = not is_ancestor(dest, tip)
     if merged:
         proc = subprocess.run(
-            ["git", *GIT_IDENTITY, "merge", "--autostash", "-m",
-             f"Merge {milestone_branch} into task {task_id}", tip],
+            [
+                "git",
+                *GIT_IDENTITY,
+                "merge",
+                "--autostash",
+                "-m",
+                f"Merge {milestone_branch} into task {task_id}",
+                tip,
+            ],
             cwd=dest,
             capture_output=True,
             text=True,
