@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { control, del, patch, post } from "../api";
 import { ActionButton, ErrorNote, EventLog, Field, StateBadge, StopButton, lines } from "../components";
 import { useEventStream, usePoll } from "../hooks";
-import { ModelPicker } from "../ModelPicker";
+import { type ModelChoice, ModelPicker, MoreModels } from "../ModelPicker";
 import type { CoveragePoint, FEvent, PlannerJob, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
 import CoverageChart from "../CoverageChart";
 import ProgressChart, { type ProgressPoint } from "../ProgressChart";
@@ -133,7 +133,7 @@ function AddTask({ project, tasks, onDone }: { project: Project; tasks: Task[]; 
   );
 }
 
-type BindingForm = { node_id: string; model: string; reasoning_effort: string };
+type BindingForm = { node_id: string; model: string; reasoning_effort: string; also: ModelChoice[] };
 const REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
 
 function RoleFields({
@@ -142,12 +142,14 @@ function RoleFields({
   onChange,
   hint,
   withEffort,
+  multi,
 }: {
   label: string;
   binding: BindingForm;
   onChange: (b: BindingForm) => void;
   hint?: string;
   withEffort?: boolean;
+  multi?: boolean;
 }) {
   return (
     <Field
@@ -171,6 +173,9 @@ function RoleFields({
           </select>
         )}
       </div>
+      {multi && (
+        <MoreModels label={label} value={binding.also} onChange={(also) => onChange({ ...binding, also })} />
+      )}
     </Field>
   );
 }
@@ -179,7 +184,12 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
   // Older projects bound "planner" and "executor": each agent falls back to those.
   const b = (...keys: string[]) => {
     const x = keys.map((k) => project.role_bindings[k]).find((v) => v?.node_id) ?? { node_id: null, model: "", reasoning_effort: "" };
-    return { node_id: x.node_id ? String(x.node_id) : "", model: x.model, reasoning_effort: x.reasoning_effort ?? "" };
+    return {
+      node_id: x.node_id ? String(x.node_id) : "",
+      model: x.model,
+      reasoning_effort: x.reasoning_effort ?? "",
+      also: (x.also ?? []).map((c) => ({ node_id: String(c.node_id), model: c.model })),
+    };
   };
   const [projectPlanner, setProjectPlanner] = useState(b("project_planner", "planner"));
   const [taskPlanner, setTaskPlanner] = useState(b("task_planner", "planner"));
@@ -223,6 +233,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     node_id: x.node_id ? Number(x.node_id) : null,
     model: x.model,
     reasoning_effort: x.reasoning_effort,
+    also: x.also.filter((c) => c.node_id).map((c) => ({ node_id: Number(c.node_id), model: c.model })),
   });
   // Warn while editing when two agents' models share an ai-swap machine but don't fit together.
   const [swapWarnings, setSwapWarnings] = useState<string[]>([]);
@@ -283,8 +294,8 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <RoleFields label="Project Planner" binding={projectPlanner} onChange={setProjectPlanner} />
         <RoleFields label="Task Planner" binding={taskPlanner} onChange={setTaskPlanner} />
         <RoleFields label="Environment" binding={envAgent} onChange={setEnvAgent} hint="Empty: uses the Task Planner's model" />
-        <RoleFields label="Tester" binding={tester} onChange={setTester} withEffort />
-        <RoleFields label="Builder" binding={builder} onChange={setBuilder} withEffort />
+        <RoleFields label="Tester" binding={tester} onChange={setTester} withEffort multi />
+        <RoleFields label="Builder" binding={builder} onChange={setBuilder} withEffort multi />
         <RoleFields label="Escalation" binding={escalation} onChange={setEscalation} withEffort />
         <Field label="Coding agent" hint="Runs the Tester and Builder">
           <select value={f.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>

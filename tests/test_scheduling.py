@@ -292,3 +292,83 @@ async def test_progress_series_and_portfolio_fields(client, origin):
 def tasks_of(pid: int) -> list[Task]:
     with session() as s:
         return list(s.exec(select(Task).where(Task.project_id == pid)).all())
+
+
+# -- a role with several nodes ----------------------------------------------------------
+
+
+def builder_on(client, origin, first: dict, *more: dict, name: str = "multi") -> dict:
+    return make_project(
+        client,
+        origin,
+        name=name,
+        executor_kind="opencode",
+        role_bindings={
+            "executor": {
+                "node_id": first["id"],
+                "model": "m1",
+                "also": [{"node_id": n["id"], "model": f"m{i + 2}"} for i, n in enumerate(more)],
+            }
+        },
+    )
+
+
+async def test_work_goes_to_the_first_node_with_a_free_slot(client, origin):
+    a = add_node(client, name="a", capacity=1)
+    b = add_node(client, name="b", capacity=1)
+    p = builder_on(client, origin, a, b)
+    make_task(client, p["id"], script="")
+    # The first choice is free: it gets the work.
+    assert [(nid, m) for _, nid, m in pick_ready()] == [(a["id"], "m1")]
+    # The first choice is full: the next one does, with its own model.
+    other = make_project(client, origin, name="other")
+    run = fake_running_run(other["id"], a["id"])
+    assert [(nid, m) for _, nid, m in pick_ready()] == [(b["id"], "m2")]
+    # Both full: the task waits.
+    fake_running_run(other["id"], b["id"])
+    assert pick_ready() == []
+    finish(run)
+    assert [(nid, m) for _, nid, m in pick_ready()] == [(a["id"], "m1")]
+
+
+async def test_a_loaded_model_is_preferred_over_list_order(client, origin, monkeypatch):
+    from ai_factory import residency
+
+    a = add_node(client, name="a", capacity=1)
+    b = add_node(client, name="b", capacity=1)
+    p = builder_on(client, origin, a, b)
+    make_task(client, p["id"], script="")
+    monkeypatch.setattr(residency, "warm", lambda n, m: n is not None and n.name == "b")
+    assert [nid for _, nid, _ in pick_ready()] == [b["id"]]
+
+
+async def test_an_escalated_task_keeps_its_one_node(client, origin):
+    a = add_node(client, name="a", capacity=1)
+    b = add_node(client, name="b", capacity=1)
+    c = add_node(client, name="c", capacity=1)
+    p = builder_on(client, origin, a, b)
+    t = make_task(client, p["id"], script="")
+    with session() as s:
+        row = s.get(Task, t["id"])
+        assert row is not None
+        row.node_id, row.model = c["id"], "big"
+        s.add(row)
+        s.commit()
+    assert [(nid, m) for _, nid, m in pick_ready()] == [(c["id"], "big")]
+
+
+def test_further_choices_are_saved_and_checked(client, origin):
+    a = add_node(client, name="a")
+    b = add_node(client, name="b")
+    p = builder_on(client, origin, a, b)
+    saved = client.get(f"/api/projects/{p['id']}").json()["role_bindings"]["executor"]
+    assert saved["also"] == [{"node_id": b["id"], "model": "m2"}]
+    r = client.patch(
+        f"/api/projects/{p['id']}",
+        json={
+            "role_bindings": {
+                "builder": {"node_id": a["id"], "model": "x", "also": [{"node_id": 999}]}
+            }
+        },
+    )
+    assert r.status_code == 400 and "node not found" in r.text

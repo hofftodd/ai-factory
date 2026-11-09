@@ -7,9 +7,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class ModelChoice(BaseModel):
+    node_id: int
+    model: str = ""
+
+
 class RoleBinding(BaseModel):
     node_id: int | None = None
     model: str = ""
+    # Further (node, model) choices, in order of preference: work goes to the first one with
+    # a free slot (see roles.choices). node_id/model above is the first choice.
+    also: list[ModelChoice] = Field(default_factory=list, max_length=16)
     # Coding agents only (Tester, Builder, escalation): passed to the model's chat template
     # as `reasoning_effort` (e.g. low, medium, high, xhigh); "" leaves the model's default.
     reasoning_effort: str = Field(default="", pattern=r"^[a-z]{0,16}$")

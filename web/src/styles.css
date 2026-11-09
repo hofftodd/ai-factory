@@ -111,6 +111,10 @@ html, body, #root { height: 100%; }
 .srv { width: 14px; height: 14px; color: var(--muted); }
 .side-row.model { padding: 4px 8px 4px 30px; font-size: 13px; }
 .side-row.model .side-name { font-weight: 400; }
+.more-models { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; align-items: flex-start; }
+.more-models .inline { width: 100%; align-items: center; }
+.more-models .inline select { flex: 1; min-width: 0; }
+.more-models .then { width: 32px; flex: none; }
 .side-empty { padding: 6px 8px; color: var(--faint); font-size: 13px; }
 .pill { font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); white-space: nowrap; }
 .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
@@ -238,6 +242,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .inline { display: flex; gap: 8px; }
 .inline > input { flex: 1; min-width: 0; }
+.inline > select:first-child { flex: 1; min-width: 0; }
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 16px; margin-bottom: 16px;

@@ -65,3 +65,41 @@ export function ModelPicker({
     </select>
   );
 }
+
+/** Further models a coding agent may use, after the first: work goes to the first with a
+ * free slot, an already loaded model before one that must load. */
+export function MoreModels({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: ModelChoice[];
+  onChange: (v: ModelChoice[]) => void;
+}) {
+  return (
+    <div className="more-models">
+      {value.map((c, i) => (
+        <div className="inline" key={i}>
+          <span className="muted small then">then</span>
+          <ModelPicker
+            ariaLabel={`${label} choice ${i + 2}`}
+            value={c}
+            onChange={(n) => onChange(value.map((x, j) => (j === i ? n : x)))}
+          />
+          <button
+            type="button"
+            className="btn small ghost"
+            aria-label={`Remove ${label} choice ${i + 2}`}
+            onClick={() => onChange(value.filter((_, j) => j !== i))}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <button type="button" className="btn small" onClick={() => onChange([...value, { node_id: "", model: "" }])}>
+        + Another model
+      </button>
+    </div>
+  );
+}

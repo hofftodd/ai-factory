@@ -54,7 +54,13 @@ from ai_factory.gateway import Gateway, new_token, serve
 from ai_factory.llm import list_models
 from ai_factory.orchestrator import gate_actions, milestone
 from ai_factory.orchestrator.jobs import JobRunner, finish_job, job_role
-from ai_factory.orchestrator.runner import TaskRunner, first_role, resolve_executor, uses_pipeline
+from ai_factory.orchestrator.runner import (
+    TaskRunner,
+    executor_choices,
+    first_role,
+    resolve_executor,
+    uses_pipeline,
+)
 from ai_factory.sandbox import Runtime, get_runtime, kill_handle
 
 log = logging.getLogger("ai_factory.orchestrator")
@@ -171,6 +177,42 @@ async def check_nodes() -> None:
     await asyncio.gather(*(one(n) for n in nodes))
 
 
+Choice = tuple[int | None, str]
+
+
+def choose_node(
+    options: list[Choice],
+    nodes: dict[int | None, Node],
+    load: dict[int, int],
+    busy: dict[tuple[str, str], str],
+    project: Project,
+    planned: dict[str, set[str]] | None = None,
+) -> tuple[tuple[int, str] | None, tuple[int, str, str] | None]:
+    """Where a coding agent runs, from its ``options`` in order of preference.
+
+    (choice, None): the first option with a free slot whose model starts without swapping
+    out one in use, an already loaded model before one that must load. (None, (node, model,
+    why)): every free option would swap; the first of them, to wait for. (None, None): no
+    option has a free slot."""
+    free: list[tuple[int, str, str, bool]] = []
+    for nid, model in options:
+        n = nodes.get(nid)
+        if nid is None or n is None or not node_available(n, load):
+            continue
+        if spend.priced(n) and spend.over_cap(project):
+            continue
+        reason = residency.blocker(n, model, busy, planned)
+        free.append((nid, model, reason, residency.warm(n, model)))
+    ok = [f for f in free if not f[2]]
+    if ok:
+        nid, model, _, _ = next((f for f in ok if f[3]), ok[0])
+        return (nid, model), None
+    if free:
+        nid, model, reason, _ = free[0]
+        return None, (nid, model, reason)
+    return None, None
+
+
 def pick_ready() -> list[tuple[Task, int | None, str]]:
     """Ready tasks in id order with their resolved (node_id, model)."""
     with session() as s:
@@ -219,30 +261,34 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             executor, needs_node = None, False
         # The first agent this attempt runs decides the node it needs.
         role = first_role(t) if executor and uses_pipeline(t, executor) else roles.BUILDER
-        _, nid, model = resolve_executor(p, t, role)
-        candidates.append((t, p, needs_node, nid, model))
+        candidates.append((t, p, needs_node, executor_choices(p, t, role)))
 
     # Work whose model is already loaded goes first: it starts without a swap.
-    candidates.sort(
-        key=lambda c: not (c[2] and c[3] is not None and residency.warm(nodes.get(c[3]), c[4]))
-    )
+    def warm(c: tuple[Task, Project, bool, list[Choice]]) -> bool:
+        return c[2] and any(n is not None and residency.warm(nodes.get(n), m) for n, m in c[3])
+
+    candidates.sort(key=lambda c: not warm(c))
     ready = []
-    for t, p, needs_node, nid, model in candidates:
+    for t, p, needs_node, options in candidates:
         if t.project_id in busy_projects:
             continue
+        nid, model = options[0]
         if needs_node and nid is not None:
-            n = nodes.get(nid)
-            if not node_available(n, load):
-                continue
-            if spend.priced(n) and spend.over_cap(p):
-                continue
-            reason = residency.blocker(n, model, busy_models, planned)
             assert t.id is not None
+            pick, blocked = choose_node(options, nodes, load, busy_models, p, planned)
+            if pick is None and blocked is None:
+                continue  # no free slot on any of its nodes
+            if pick is not None:
+                (nid, model), reason = pick, ""
+            else:
+                assert blocked is not None
+                nid, model, reason = blocked
             waiting, first = residency.hold("task", t.id, reason, max_wait)
             if waiting:
                 if first:
                     emit(t.project_id, t.id, "system", f"waiting to start: {reason}")
                 continue
+            n = nodes[nid]
             load[nid] = load.get(nid, 0) + 1
             residency.reserve(planned, n, model)
         busy_projects.add(t.project_id)

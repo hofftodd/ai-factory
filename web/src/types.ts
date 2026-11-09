@@ -15,6 +15,7 @@ export type TaskState =
 export interface RoleBinding {
   node_id: number | null;
   model: string;
+  also?: { node_id: number; model: string }[];
   reasoning_effort?: string;
 }
 

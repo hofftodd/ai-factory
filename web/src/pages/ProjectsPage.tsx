@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { ErrorNote, Field } from "../components";
 import { usePoll } from "../hooks";
-import { ModelPicker } from "../ModelPicker";
+import { type ModelChoice, ModelPicker, MoreModels } from "../ModelPicker";
 import { Counts, PHASE_LABEL, ProgressBar } from "../projectBits";
 import type { GitHubTokenStatus, Node, Project, SystemInfo } from "../types";
 
@@ -64,6 +64,7 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
     executor_kind: "pi",
     node_id: "",
     model: "",
+    more_models: [] as ModelChoice[],
     planner_node_id: "",
     planner_model: "",
     push_after_merge: false,
@@ -115,7 +116,17 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
             test_note: form.test_note.trim(),
             skip_spec: form.skip_spec,
             role_bindings: {
-              ...(form.node_id ? { executor: { node_id: Number(form.node_id), model: form.model } } : {}),
+              ...(form.node_id
+                ? {
+                    executor: {
+                      node_id: Number(form.node_id),
+                      model: form.model,
+                      also: form.more_models
+                        .filter((c) => c.node_id)
+                        .map((c) => ({ node_id: Number(c.node_id), model: c.model })),
+                    },
+                  }
+                : {}),
               ...(form.planner_node_id
                 ? { planner: { node_id: Number(form.planner_node_id), model: form.planner_model } }
                 : {}),
@@ -191,12 +202,22 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
             onChange={(c) => setForm((f) => ({ ...f, planner_node_id: c.node_id, planner_model: c.model }))}
           />
         </Field>
-        <Field label="Coding agent" hint="Runs the coding agent (its key never enters the sandbox)">
+        <Field
+          label="Coding agent"
+          hint="Runs the Tester and Builder. With several models, work goes to the first with a free slot."
+        >
           <ModelPicker
             ariaLabel="Coding agent model"
             value={{ node_id: form.node_id, model: form.model }}
             onChange={(c) => setForm((f) => ({ ...f, node_id: c.node_id, model: c.model }))}
           />
+          {form.node_id && (
+            <MoreModels
+              label="Coding agent"
+              value={form.more_models}
+              onChange={(more_models) => setForm((f) => ({ ...f, more_models }))}
+            />
+          )}
         </Field>
         <Field label="Push milestone branch after each merge">
           <input type="checkbox" checked={form.push_after_merge} onChange={(e) => set("push_after_merge", e.target.checked)} />
