@@ -174,7 +174,7 @@ export function Sidebar({
                   n.healthy === false ? "failed" : n.model_state === "ready" ? (n.active ? "busy" : "ready") : n.model_state === "starting" ? "busy" : "idle";
                 const word = n.healthy === false ? "unreachable" : n.model_state === "ready" ? "loaded" : n.model_state === "starting" ? "loading" : m.ai_swap ? "not loaded" : "";
                 return (
-                  <Link key={n.id} to="/nodes" className="side-row model" onClick={onNavigate} title={`${n.name}${n.models[0] ? ` (${n.models[0]})` : ""}${word ? `: ${word}` : ""}`}>
+                  <Link key={n.id} to="/nodes" className="side-row model" onClick={onNavigate} title={`${n.name}${n.model ? ` (${n.model})` : ""}${word ? `: ${word}` : ""}`}>
                     <span className={`sdot ${dot}`} aria-hidden="true" />
                     <span className="side-name">{n.name}</span>
                     <span className="side-meta">

@@ -315,5 +315,5 @@ export interface Machine {
   budget_gb: number;
   used_gb: number;
   reserved: string;
-  nodes: (Node & { model_state: string })[];
+  nodes: (Node & { model: string; model_state: string })[];
 }
