@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { ErrorNote, Field } from "../components";
 import { usePoll } from "../hooks";
+import { ModelPicker } from "../ModelPicker";
 import { Counts, PHASE_LABEL, ProgressBar } from "../projectBits";
 import type { GitHubTokenStatus, Node, Project, SystemInfo } from "../types";
 
@@ -55,7 +56,6 @@ interface CreatedRepo {
 }
 
 function AddProject({ onDone }: { onDone: (p: Project) => void }) {
-  const { data: nodes } = usePoll<Node[]>("/api/nodes", 10000);
   const { data: sys } = usePoll<SystemInfo>("/api/system", 10000);
   const [form, setForm] = useState({
     name: "",
@@ -85,8 +85,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
   const owner = form.new_owner || owners?.[0] || "";
   const repoName = form.new_name || repoSlug(form.name);
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
-  const node = nodes?.find((n) => String(n.id) === form.node_id);
-  const plannerNode = nodes?.find((n) => String(n.id) === form.planner_node_id);
 
   return (
     <form
@@ -186,37 +184,19 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
             ))}
           </select>
         </Field>
-        <Field label="Planner node" hint="Writes the spec with you and breaks it into tasks (local or Claude)">
-          <select value={form.planner_node_id} onChange={(e) => set("planner_node_id", e.target.value)}>
-            <option value="">— none —</option>
-            {nodes?.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.name}
-              </option>
-            ))}
-          </select>
+        <Field label="Planner" hint="Writes the spec with you and breaks it into tasks (local or Claude)">
+          <ModelPicker
+            ariaLabel="Planner model"
+            value={{ node_id: form.planner_node_id, model: form.planner_model }}
+            onChange={(c) => setForm((f) => ({ ...f, planner_node_id: c.node_id, planner_model: c.model }))}
+          />
         </Field>
-        <Field label="Planner model">
-          <input list="planner-models" value={form.planner_model} onChange={(e) => set("planner_model", e.target.value)} />
-          <datalist id="planner-models">
-            {plannerNode?.models.map((m) => <option key={m} value={m} />)}
-          </datalist>
-        </Field>
-        <Field label="Executor node" hint="Runs the coding agent (its key never enters the sandbox)">
-          <select value={form.node_id} onChange={(e) => set("node_id", e.target.value)}>
-            <option value="">— none —</option>
-            {nodes?.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Executor model">
-          <input list="models" value={form.model} onChange={(e) => set("model", e.target.value)} />
-          <datalist id="models">
-            {node?.models.map((m) => <option key={m} value={m} />)}
-          </datalist>
+        <Field label="Coding agent" hint="Runs the coding agent (its key never enters the sandbox)">
+          <ModelPicker
+            ariaLabel="Coding agent model"
+            value={{ node_id: form.node_id, model: form.model }}
+            onChange={(c) => setForm((f) => ({ ...f, node_id: c.node_id, model: c.model }))}
+          />
         </Field>
         <Field label="Push milestone branch after each merge">
           <input type="checkbox" checked={form.push_after_merge} onChange={(e) => set("push_after_merge", e.target.checked)} />
