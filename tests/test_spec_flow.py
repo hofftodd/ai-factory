@@ -22,6 +22,7 @@ from ai_factory.core.models import (
 )
 from ai_factory.db import session
 from ai_factory.orchestrator.main import Orchestrator, recover
+from ai_factory.planner import FAKE_WRITE_RETRY
 from tests.conftest import git
 from tests.fakellm import FakeLLM, last_user_text, system_text
 from tests.helpers import TERMINAL, drive, project
@@ -180,6 +181,89 @@ async def test_planner_reads_files_pushed_after_the_project_was_created(
         texts = [e.message for e in s.exec(select(Event).where(Event.project_id == p["id"]))]
     assert "merged 1 new commit from origin/main" in texts
     assert "read file: schema/domain.json (from line 1)" in texts
+
+
+FAKE_WRITE = f"""I updated the documents.
+
+[wrote {FEATURE}/requirements.md]
+
+[wrote {FEATURE}/design.md]
+
+Ready for review."""
+
+
+def fake_then(real: str | None):
+    """A planner that types "[wrote ...]" instead of writing blocks, then (when told
+    nothing was saved) replies with `real`, or keeps faking when `real` is None."""
+
+    def planner(req):
+        if last_user_text(req) == FAKE_WRITE_RETRY and real is not None:
+            return real
+        return FAKE_WRITE
+
+    return planner
+
+
+async def test_typed_write_notes_are_caught_and_retried(client, origin, llm):
+    llm.planner = fake_then(CHAT_REPLY)
+    p = spec_project(client, origin, llm)
+    await chat(client, Orchestrator(), p["id"], "Build a greeter.")
+    assert job_states(p["id"]) == [JobState.DONE]
+    spec = client.get(f"/api/projects/{p['id']}/spec").json()
+    assert spec["docs"]["requirements"].strip() == REQUIREMENTS.strip()
+    assert f"{FEATURE}/requirements.md" in spec["messages"][-1]["files"]
+    assert len(llm.requests) == 2
+    with session() as s:
+        texts = [e.message for e in s.exec(select(Event).where(Event.project_id == p["id"]))]
+    assert any("did not save" in t and "asking again" in t for t in texts)
+
+
+async def test_typed_write_notes_that_persist_are_reported(client, origin, llm):
+    llm.planner = fake_then(None)
+    p = spec_project(client, origin, llm)
+    head = git("rev-parse", "HEAD", cwd=gitops.repo_dir(p["id"])).strip()
+    await chat(client, Orchestrator(), p["id"], "Build a greeter.")
+    spec = client.get(f"/api/projects/{p['id']}/spec").json()
+    assert spec["docs"]["requirements"] == ""
+    reply = spec["messages"][-1]
+    assert reply["files"] == []
+    assert "nothing was saved for" in reply["content"] and "design.md" in reply["content"]
+    assert git("rev-parse", "HEAD", cwd=gitops.repo_dir(p["id"])).strip() == head
+
+
+async def test_an_unclosed_file_block_is_asked_for_again(client, origin, llm):
+    open_block = CHAT_REPLY.rsplit(">>>", 1)[0] + "\nThat is everything."  # last block left open
+    resend = f"<<<FILE {FEATURE}/acceptance-criteria.md\n{ACCEPTANCE}>>>\nFixed."
+
+    def planner(req):
+        return resend if "was never closed" in last_user_text(req) else open_block
+
+    llm.planner = planner
+    p = spec_project(client, origin, llm)
+    await chat(client, Orchestrator(), p["id"], "Build a greeter.")
+    spec = client.get(f"/api/projects/{p['id']}/spec").json()
+    # The first reply's two documents are kept, and the resent one is added.
+    assert spec["docs"]["requirements"].strip() == REQUIREMENTS.strip()
+    assert spec["docs"]["acceptance"].strip() == ACCEPTANCE.strip()
+    reply = spec["messages"][-1]
+    assert len(reply["files"]) == 3 and "nothing was saved" not in reply["content"]
+    assert "Fixed." in reply["content"]
+
+
+async def test_history_explains_saved_files_instead_of_showing_notes(client, origin, llm):
+    p = spec_project(client, origin, llm)
+    orch = Orchestrator()
+    await chat(client, orch, p["id"], "Build a greeter.")
+    await chat(client, orch, p["id"], "Looks good.")
+    earlier = [m for m in llm.requests[-1]["messages"] if m["role"] == "assistant"][0]
+    assert "[wrote " not in earlier["content"]
+    assert (
+        f"ai-factory saved {FEATURE}/requirements.md from a complete <<<FILE block"
+        in (earlier["content"])
+    )
+    # The dashboard still shows the short notes.
+    spec = client.get(f"/api/projects/{p['id']}/spec").json()
+    assert f"[wrote {FEATURE}/requirements.md]" in spec["messages"][1]["content"]
 
 
 async def test_second_turn_sees_current_documents(client, origin, llm):

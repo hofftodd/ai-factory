@@ -39,6 +39,8 @@ DOC_NAMES = tuple(roles.DOCS)  # requirements, design, acceptance, tasks
 _FILE_OPEN = re.compile(r"^<<<FILE(?:[ \t]+(.*?))?[ \t]*$")
 _CMD_OPEN = re.compile(r"^<<<ACCEPTANCE_CMD[ \t]*$")
 _CLOSE = ">>>"
+# The note parse_chat leaves in a reply where a file block was, e.g. "[wrote specs/x.md]".
+_WROTE = re.compile(r"^\[wrote ([^\]\s]+)\]$", re.M)
 
 
 def _exists(project: Project):  # type: ignore[no-untyped-def]
@@ -65,6 +67,8 @@ class ChatOutput:
     message: str  # what the planner said, with file blocks replaced by notes
     files: dict[str, str] = field(default_factory=dict)
     rejected: list[str] = field(default_factory=list)
+    # A file block still open when the reply ended (no closing >>>): not written.
+    incomplete: list[str] = field(default_factory=list)
 
 
 def parse_chat(project: Project, text: str) -> ChatOutput:
@@ -127,11 +131,58 @@ def parse_chat(project: Project, text: str) -> ChatOutput:
             message.append(line)
     if block is not None:
         kind, path = block
+        if kind == "file":
+            out.incomplete.append(path)
         message.append(
             f"[incomplete file {path}: not written]" if kind == "file" else "[incomplete command]"
         )
     out.message = "\n".join(message).strip()
     return out
+
+
+def history_text(role: str, content: str) -> str:
+    """A stored chat turn as the planner sees it again. Stored replies keep a
+    "[wrote <path>]" note where each file block was; shown as is, a model learns that
+    writing that line saves a file, and stops writing blocks. So the note says plainly
+    what happened instead."""
+    if role != "assistant":
+        return content
+    return _WROTE.sub(
+        r"(ai-factory saved \1 from a complete <<<FILE block in this reply; the block is "
+        r"left out here, and the document's current text is under Current documents)",
+        content,
+    )
+
+
+def claimed_writes(text: str, out: ChatOutput) -> list[str]:
+    """Paths a reply says it wrote ("[wrote <path>]" typed in the text) without a file
+    block for them: nothing was saved."""
+    return sorted({p for p in _WROTE.findall(text) if p not in out.files})
+
+
+def unsaved_writes(text: str, out: ChatOutput) -> list[str]:
+    """Documents the reply meant to write but didn't: typed notes, or a block left open."""
+    return sorted(set(claimed_writes(text, out)) | set(out.incomplete))
+
+
+BLOCK_FORMAT = "<<<FILE path/of/document.md\n...the whole document...\n>>>"
+FAKE_WRITE_RETRY = (
+    "Nothing was saved: your reply has no <<<FILE blocks, only lines like "
+    '"[wrote <path>]". ai-factory adds those notes itself after saving a file; typing '
+    "them does nothing. Output every document you changed again, each as a complete "
+    "block:\n" + BLOCK_FORMAT
+)
+
+
+def unsaved_retry(text: str, out: ChatOutput) -> str:
+    """What to tell a planner whose reply left documents unsaved."""
+    if claimed_writes(text, out):
+        return FAKE_WRITE_RETRY
+    return (
+        "Not saved: the block for " + ", ".join(out.incomplete) + " was never closed with a "
+        "line containing only >>>, so it was discarded. Output that document again, "
+        "complete, ending with >>> on its own line:\n" + BLOCK_FORMAT
+    )
 
 
 # What `.ai-factory/Dockerfile` builds on (docker/executor-base/Dockerfile). The
