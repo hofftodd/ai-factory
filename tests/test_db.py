@@ -2,9 +2,9 @@ import sqlite3
 
 from sqlmodel import select
 
-from foreman.config import get_settings
-from foreman.core.models import Project, ProjectPhase
-from foreman.db import reset_engine_cache, session
+from ai_factory.config import get_settings
+from ai_factory.core.models import Project, ProjectPhase
+from ai_factory.db import reset_engine_cache, session
 
 
 def test_old_database_gets_new_columns():

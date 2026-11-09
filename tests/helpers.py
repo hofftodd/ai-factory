@@ -5,8 +5,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from foreman.core.models import Project, Task, TaskState
-from foreman.db import session
+from ai_factory.core.models import Project, Task, TaskState
+from ai_factory.db import session
 
 
 def make_project(client: Any, origin: Any, **kw: Any) -> dict[str, Any]:

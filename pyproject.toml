@@ -1,5 +1,5 @@
 [project]
-name = "foreman"
+name = "ai-factory"
 version = "1.0.0"
 description = "Local agent coding orchestrator: spec-driven SDLC with autonomous, sandboxed coding agents"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-foreman = "foreman.cli:main"
+ai-factory = "ai_factory.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.32,<0.12.0"]

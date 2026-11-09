@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from sqlmodel import col, select
 
-from foreman.core import spend
-from foreman.core.models import (
+from ai_factory.core import spend
+from ai_factory.core.models import (
     Event,
     Gate,
     GateKind,
@@ -20,8 +20,8 @@ from foreman.core.models import (
     TaskRun,
     TaskState,
 )
-from foreman.db import session
-from foreman.orchestrator.main import Orchestrator, check_nodes, node_load, pick_ready
+from ai_factory.db import session
+from ai_factory.orchestrator.main import Orchestrator, check_nodes, node_load, pick_ready
 from tests.fakellm import FakeLLM
 from tests.helpers import drive, make_project, make_task, project
 

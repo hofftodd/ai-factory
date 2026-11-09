@@ -1,16 +1,16 @@
 """Live smoke test on Claude: one small project from idea to done, through the API.
 
-Runs against a Foreman that is already up (`foreman up`), with real models:
+Runs against an ai-factory that is already up (`ai-factory up`), with real models:
 Opus 5.5 plans (Project and Task Planner), Sonnet 5.5 writes the tests and takes
 escalations, Haiku 5.5 writes the code.
 The project gets a spend cap, so a runaway costs at most that much.
 
     export ANTHROPIC_API_KEY=sk-ant-...
-    uv run foreman up &                      # in another terminal
+    uv run ai-factory up &                      # in another terminal
     uv run python scripts/claude_smoke.py    # --cap 3 --url http://127.0.0.1:8700
 
 By default it creates a throwaway local git repository to work in; pass
---repo to use your own (Foreman never pushes unless you approve the milestone).
+--repo to use your own (ai-factory never pushes unless you approve the milestone).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 
-from foreman.claude_setup import API_ROOT, NODES
+from ai_factory.claude_setup import API_ROOT, NODES
 
 IDEA = """Build a tiny Python command-line tool, `wordfreq`, that prints the N most
 common words in a text file (case-insensitive, punctuation ignored), with unit
@@ -38,9 +38,9 @@ NUDGE = """Please write any planning documents that are still missing (requireme
 design, acceptance criteria) now."""
 
 
-class Foreman:
+class AiFactory:
     def __init__(self, url: str) -> None:
-        token = os.environ.get("FOREMAN_TOKEN", "")
+        token = os.environ.get("AI_FACTORY_TOKEN", "")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         self.http = httpx.Client(base_url=url, headers=headers, timeout=60)
 
@@ -66,7 +66,7 @@ class Foreman:
 
 def local_repo() -> str:
     """A bare repository with one commit, standing in for GitHub."""
-    root = Path(tempfile.mkdtemp(prefix="foreman-smoke-"))
+    root = Path(tempfile.mkdtemp(prefix="ai-factory-smoke-"))
     bare, seed = root / "wordfreq.git", root / "seed"
     git = ["git", "-c", "user.name=smoke", "-c", "user.email=smoke@local"]
     subprocess.run([*git, "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
@@ -78,7 +78,7 @@ def local_repo() -> str:
     return str(bare)
 
 
-def ensure_nodes(f: Foreman, key: str, api_root: str) -> dict[str, dict[str, Any]]:
+def ensure_nodes(f: AiFactory, key: str, api_root: str) -> dict[str, dict[str, Any]]:
     """The three Claude nodes, created or updated through the API."""
     existing = {n["name"]: n for n in f.call("GET", "/api/nodes")}
     out = {}
@@ -118,7 +118,7 @@ def main() -> None:
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         sys.exit("set ANTHROPIC_API_KEY first")
-    f = Foreman(args.url)
+    f = AiFactory(args.url)
     nodes = ensure_nodes(f, key, args.api_root)
     print("nodes: " + ", ".join(f"{r}={n['name']}" for r, n in nodes.items()))
 

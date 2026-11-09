@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from foreman.db import reset_engine_cache
+from ai_factory.db import reset_engine_cache
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -23,15 +23,15 @@ def git(*args: str, cwd: Path) -> str:
 @pytest.fixture(autouse=True)
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data = tmp_path / "data"
-    monkeypatch.setenv("FOREMAN_DATA_DIR", str(data))
-    monkeypatch.setenv("FOREMAN_RUNTIME", os.environ.get("TEST_FOREMAN_RUNTIME", "local"))
-    monkeypatch.setenv("FOREMAN_POLL_INTERVAL_S", "0.1")
-    monkeypatch.setenv("FOREMAN_STOP_GRACE_S", "2")
-    monkeypatch.setenv("FOREMAN_GATEWAY_PORT", "0")  # ephemeral: tests run side by side
-    monkeypatch.setenv("FOREMAN_NODE_CHECK_S", "0")  # tests call check_nodes() themselves
-    monkeypatch.delenv("FOREMAN_TOKEN", raising=False)
+    monkeypatch.setenv("AI_FACTORY_DATA_DIR", str(data))
+    monkeypatch.setenv("AI_FACTORY_RUNTIME", os.environ.get("TEST_AI_FACTORY_RUNTIME", "local"))
+    monkeypatch.setenv("AI_FACTORY_POLL_INTERVAL_S", "0.1")
+    monkeypatch.setenv("AI_FACTORY_STOP_GRACE_S", "2")
+    monkeypatch.setenv("AI_FACTORY_GATEWAY_PORT", "0")  # ephemeral: tests run side by side
+    monkeypatch.setenv("AI_FACTORY_NODE_CHECK_S", "0")  # tests call check_nodes() themselves
+    monkeypatch.delenv("AI_FACTORY_TOKEN", raising=False)
     reset_engine_cache()
-    from foreman import residency
+    from ai_factory import residency
 
     residency.reset()
     return data
@@ -59,7 +59,7 @@ def origin(tmp_path: Path) -> Path:
 def client():
     from fastapi.testclient import TestClient
 
-    from foreman.api.app import create_app
+    from ai_factory.api.app import create_app
 
     with TestClient(create_app()) as c:
         yield c

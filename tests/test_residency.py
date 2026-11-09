@@ -1,4 +1,4 @@
-"""Swap-aware scheduling on ai-swap nodes (foreman.residency)."""
+"""Swap-aware scheduling on ai-swap nodes (ai_factory.residency)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import time
 import pytest
 from sqlmodel import col, select
 
-from foreman import residency
-from foreman.core.models import Event, Node, RunState, Task, TaskRun, TaskState
-from foreman.db import session
-from foreman.orchestrator.main import pick_ready
+from ai_factory import residency
+from ai_factory.core.models import Event, Node, RunState, Task, TaskRun, TaskState
+from ai_factory.db import session
+from ai_factory.orchestrator.main import pick_ready
 from tests.helpers import make_project, make_task
 
 SWAP = "http://swap.test:8080"
@@ -107,7 +107,7 @@ def test_swapping_out_a_model_in_use_waits(client):
 
 def test_eviction_follows_ai_swap_lru_order(client):
     """ai-swap unloads the least recently used idle model, even if another idle model would
-    do: an agent between turns looks idle to it, so Foreman must check the actual victim."""
+    do: an agent between turns looks idle to it, so ai-factory must check the actual victim."""
     nid = add_node(client)
     cluster(
         220,
@@ -227,7 +227,7 @@ def test_two_cold_models_that_dont_fit_together_start_one_at_a_time(client, orig
 
 
 def test_waiting_has_a_limit(client, origin, monkeypatch):
-    monkeypatch.setenv("FOREMAN_SWAP_WAIT_S", "1")
+    monkeypatch.setenv("AI_FACTORY_SWAP_WAIT_S", "1")
     nid = add_node(client)
     cluster(32, thinkingcap=("ready", 30, "1"), gemma=("stopped", 30, ""))
     other = project_on(client, origin, nid, "thinkingcap", name="alpha")

@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from foreman import gitops
-from foreman.core.models import Project, TaskState
-from foreman.db import session
-from foreman.executors import EXECUTORS
-from foreman.orchestrator.main import Orchestrator, recover
+from ai_factory import gitops
+from ai_factory.core.models import Project, TaskState
+from ai_factory.db import session
+from ai_factory.executors import EXECUTORS
+from ai_factory.orchestrator.main import Orchestrator, recover
 from tests.conftest import git
 from tests.fakellm import FakeLLM
 from tests.helpers import TERMINAL, drive, make_project, make_task, project, task
@@ -92,7 +92,7 @@ def test_interrupted_acceptance_is_killed_and_cleared(client, origin):
 
 
 def test_aider_command_and_files(tmp_path):
-    from foreman.core.models import Task
+    from ai_factory.core.models import Task
 
     inv = EXECUTORS["aider"].prepare(
         Project(name="p", repo_url="x"),
@@ -113,7 +113,7 @@ def test_aider_command_and_files(tmp_path):
     assert cmd.endswith("-- src/a.py")  # globs are not files
     assert "--read src/b.py" in cmd and "--read src/a.py" not in cmd
     assert inv.env["OPENAI_API_BASE"] == "http://gw/g/tok/v1"
-    assert inv.env["OPENAI_API_KEY"] == "foreman"  # the real key stays host-side
+    assert inv.env["OPENAI_API_KEY"] == "ai-factory"  # the real key stays host-side
 
 
 @pytest.mark.skipif(shutil.which("aider") is not None, reason="aider is installed here")

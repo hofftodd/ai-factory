@@ -1,7 +1,7 @@
-// Thin client for the FastAPI backend. An optional bearer token (FOREMAN_TOKEN on the
+// Thin client for the FastAPI backend. An optional bearer token (AI_FACTORY_TOKEN on the
 // server) is kept in localStorage and sent with every call.
 
-const TOKEN_KEY = "foreman.token";
+const TOKEN_KEY = "ai-factory.token";
 
 export function getToken(): string {
   try {

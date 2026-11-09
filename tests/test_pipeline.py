@@ -11,9 +11,9 @@ import json
 
 from sqlmodel import col, select
 
-from foreman import gitops
-from foreman.config import get_settings
-from foreman.core.models import (
+from ai_factory import gitops
+from ai_factory.config import get_settings
+from ai_factory.core.models import (
     Event,
     Gate,
     GateKind,
@@ -24,11 +24,11 @@ from foreman.core.models import (
     TestCase,
     TestRun,
 )
-from foreman.db import session
-from foreman.orchestrator.main import Orchestrator
+from ai_factory.db import session
+from ai_factory.orchestrator.main import Orchestrator
 from tests.helpers import TERMINAL, drive, make_project, task
 
-RUN_SH = r"""out="${FOREMAN_RESULTS:-/tmp}"
+RUN_SH = r"""out="${AI_FACTORY_RESULTS:-/tmp}"
 pass=0; fail=0; cases=""
 for t in tests/check_*.sh; do
   name=$(basename "$t" .sh)
@@ -70,8 +70,8 @@ def scripts(tester: str = TESTER, builder: str = BUILDER) -> str:
 
 def add_task(client, pid: int, executor_script: str, **kw) -> dict:
     """An agent-style task (criteria, no test command) run by role scripts."""
-    from foreman.core.models import Project
-    from foreman.db import session as db
+    from ai_factory.core.models import Project
+    from ai_factory.db import session as db
 
     with db() as s:
         p = s.get(Project, pid)
@@ -268,7 +268,7 @@ async def test_a_failed_task_can_go_back_to_the_tester_with_a_note(client, origi
 
 # The Builder finds tests that can't all pass, and reports instead of working around them.
 CONFLICT = BUILDER + (
-    """echo 'check_greet contradicts check_old' > "$FOREMAN_RESULTS/tests-conflict.md"\n"""
+    """echo 'check_greet contradicts check_old' > "$AI_FACTORY_RESULTS/tests-conflict.md"\n"""
 )
 
 

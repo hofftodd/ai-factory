@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from foreman.core.models import Project
-from foreman.planner import (
+from ai_factory.core.models import Project
+from ai_factory.planner import (
     ACCEPTANCE,
     DOCS,
     SETUP,
@@ -44,7 +44,7 @@ def test_planner_may_not_write_code_tests_or_commands():
     text = (
         "<<<FILE src/app.py\nx\n>>>\n"
         "<<<FILE tests/acceptance/test_x.py\nx\n>>>\n"
-        "<<<FILE .foreman/Dockerfile\nFROM x\n>>>\n"
+        "<<<FILE .ai-factory/Dockerfile\nFROM x\n>>>\n"
         "<<<FILE ../../etc/passwd\nx\n>>>\n"
         "<<<ACCEPTANCE_CMD\npytest\n>>>\n"
     )
@@ -53,7 +53,7 @@ def test_planner_may_not_write_code_tests_or_commands():
     assert out.rejected == [
         "src/app.py",
         "tests/acceptance/test_x.py",
-        ".foreman/Dockerfile",
+        ".ai-factory/Dockerfile",
         "../../etc/passwd",
         "an acceptance command",
     ]
@@ -62,7 +62,7 @@ def test_planner_may_not_write_code_tests_or_commands():
 def test_writable_is_the_three_planning_documents():
     for name in ("requirements.md", "design.md", "acceptance-criteria.md"):
         assert writable(P, f"{D}/{name}")
-    assert not writable(P, f"{D}/tasks.md")  # Foreman keeps the task list
+    assert not writable(P, f"{D}/tasks.md")  # ai-factory keeps the task list
     assert not writable(P, f"{D}/notes.md")
     assert not writable(P, "specs/other/requirements.md")
     assert not writable(P, "tests/acceptance/test_x.py")
@@ -202,7 +202,7 @@ def test_planner_prompts_think_in_plain_language():
     for prompt in (design, review, breakdown):
         assert "Never write code, tests, file names or paths, shell commands" in prompt
     assert f"{D}/acceptance-criteria.md" in design
-    assert "Foreman adds three standard tasks" in breakdown
+    assert "ai-factory adds three standard tasks" in breakdown
 
 
 def test_parse_chat_accepts_separator_style_blocks():
@@ -243,8 +243,8 @@ def test_parse_chat_bare_terminator_before_prose_is_not_a_path():
 
 
 def test_old_projects_keep_their_document_names(tmp_path, monkeypatch):
-    from foreman import gitops
-    from foreman.core import roles
+    from ai_factory import gitops
+    from ai_factory.core import roles
 
     def exists(rel: str) -> bool:
         return rel in {f"{D}/spec.md", f"{D}/plan.md"}

@@ -8,9 +8,9 @@ import threading
 
 import pytest
 
-from foreman import research
-from foreman.core.models import Node
-from foreman.llm import stream_chat
+from ai_factory import research
+from ai_factory.core.models import Node
+from ai_factory.llm import stream_chat
 from tests.fakellm import FakeLLM
 
 
@@ -49,12 +49,12 @@ def searx(monkeypatch):
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("FOREMAN_SEARCH_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.setenv("AI_FACTORY_SEARCH_URL", f"http://127.0.0.1:{server.server_address[1]}")
     yield seen
     server.shutdown()
 
 
-async def test_local_planner_searches_through_foreman(llm, searx):
+async def test_local_planner_searches_through_ai_factory(llm, searx):
     node = Node(name="local", base_url=llm.url)
     found: list[str] = []
     result = await stream_chat(
@@ -74,7 +74,7 @@ async def test_local_planner_searches_through_foreman(llm, searx):
 
 
 async def test_no_search_service_means_no_tools(llm, monkeypatch):
-    monkeypatch.delenv("FOREMAN_SEARCH_URL", raising=False)
+    monkeypatch.delenv("AI_FACTORY_SEARCH_URL", raising=False)
     node = Node(name="local", base_url=llm.url)
     await stream_chat(node, "m", "S", [{"role": "user", "content": "x"}], research=True)
     assert "tools" not in llm.requests[-1]

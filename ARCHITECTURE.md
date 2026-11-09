@@ -1,18 +1,18 @@
-# How Foreman works
+# How ai-factory works
 
-This document explains how Foreman is put together and why, in plain language.
+This document explains how ai-factory is put together and why, in plain language.
 For setup and usage see the [README](README.md); for the formal requirements
 see [`specs/000-orchestrator/`](specs/000-orchestrator/).
 
 ## The big picture
 
-Think of a foreman on a building site. They don't lay bricks. They agree the
-plans with the client, break the job into pieces small enough for one worker,
-hand each piece out, check the work, adjust the plan as things come up, and
-stop everything if something goes wrong.
+Think of a factory floor. The managers don't build anything themselves. They
+agree the order with the customer, break it into jobs small enough for one
+station, hand each job out, inspect the work, adjust the plan as things come
+up, and stop the line if something goes wrong.
 
-Foreman does that for software, with five kinds of worker, each allowed to
-do one job and nothing else:
+ai-factory runs that floor for software, with five kinds of worker, each
+allowed to do one job and nothing else:
 
 - the **Project Planning Agent** agrees the requirements, design and
   acceptance criteria with you, in plain language;
@@ -23,7 +23,7 @@ do one job and nothing else:
 - the **Tester Agent** writes the tests for each task, before any code exists;
 - the **Builder Agent** writes the code that makes those tests pass.
 
-Foreman itself, the **Orchestrator**, is ordinary code, not a model. It hands
+ai-factory itself, the **Orchestrator**, is ordinary code, not a model. It hands
 out the work, checks every result, merges it, and refuses anything an agent
 does outside its role. You watch it all in a web dashboard and can stop
 anything at any moment.
@@ -34,7 +34,7 @@ agent can use a different one.
 ```mermaid
 flowchart LR
     you([You, in the browser]) --> api[Dashboard + API]
-    api --> db[(foreman.db)]
+    api --> db[(ai-factory.db)]
     api --> ctl[(control.db)]
     orch[Orchestrator] --> db
     orch --> gw[Model gateway]
@@ -57,7 +57,7 @@ flowchart TB
     docs -- reads --> tp[Task Planning Agent]
     tp -- manages --> tasks[(Tasks)]
     docs & tasks -- read --> env[Environment Agent]
-    env -- writes --> image[(Toolchain image<br/>.foreman/)]
+    env -- writes --> image[(Toolchain image<br/>.ai-factory/)]
     image -. runs every step .-> tester & builder
     tasks --> tester[Tester Agent]
     tasks --> builder[Builder Agent]
@@ -71,7 +71,7 @@ flowchart TB
 |---|---|---|
 | Project Planning Agent | write the requirements, design and acceptance criteria (markdown); talk with you; research topics on the web | write code, tests or commands; create or change tasks |
 | Task Planning Agent | read the documents; create, split, change and remove tasks, in plain language; propose a change to the documents (you decide) | write documents, code or tests; name files or commands |
-| Environment Agent | read the documents and the task list; write the toolchain Dockerfile and its check script (`.foreman/`) | write code, tests or documents |
+| Environment Agent | read the documents and the task list; write the toolchain Dockerfile and its check script (`.ai-factory/`) | write code, tests or documents |
 | Tester Agent | write and change files under the project's test paths (`tests/` by default); run commands and tests | change any file outside the test paths, or the toolchain image |
 | Builder Agent | write and change code and docs (`README.md`, `ARCHITECTURE.md`); run commands, including the tests | change any test, or the toolchain image |
 
@@ -81,26 +81,26 @@ tests that judge it**, and the planners think about *what* to build, never
 
 These rules are enforced, not just asked for:
 
-- **The planners have no tools.** They only send text back. Foreman reads
+- **The planners have no tools.** They only send text back. ai-factory reads
   out of it the actions that role is allowed (document files for the
   Project Planner, task changes for the Task Planner) and ignores the rest.
   A task that names files or commands is refused.
 - **The Tester and Builder get different views of the repository.** In the
   Tester's container the code is mounted read-only and only the test folders
   are writable; in the Builder's it is the other way round.
-- **Every change is checked afterwards.** After each step Foreman looks at
+- **Every change is checked afterwards.** After each step ai-factory looks at
   what changed. A Tester that touched code, or a Builder that touched a test
   (including test files kept next to the code, like `foo_test.go`), fails
   the step, and its changes are thrown away.
 - Anything refused is recorded as a **denied** event, shown in the activity
   feed and on the task page.
 
-The list of roles lives in one place, `src/foreman/core/roles.py`, and the
+The list of roles lives in one place, `src/ai_factory/core/roles.py`, and the
 dashboard shows it (project Settings → "Agents and what they may do").
 
 ## The pieces
 
-`foreman up` starts three separate programs. They are separate on purpose:
+`ai-factory up` starts three separate programs. They are separate on purpose:
 if one hangs or crashes, the others keep working.
 
 **Dashboard and API.** The web server you talk to. It shows projects, tasks,
@@ -134,10 +134,10 @@ Everything lives under the data directory (`./data` by default):
 
 | What | Where | Notes |
 |---|---|---|
-| Projects, tasks, runs, events, checkpoints, nodes | `foreman.db` | SQLite. Every state change is recorded as an event, which is what the activity feeds show. |
-| Stop requests and the E-stop flag | `control.db` | Kept apart so a busy or stuck writer on `foreman.db` can never delay a Stop. Only the dashboard writes here; the orchestrator only reads it. |
+| Projects, tasks, runs, events, checkpoints, nodes | `ai-factory.db` | SQLite. Every state change is recorded as an event, which is what the activity feeds show. |
+| Stop requests and the E-stop flag | `control.db` | Kept apart so a busy or stuck writer on `ai-factory.db` can never delay a Stop. Only the dashboard writes here; the orchestrator only reads it. |
 | "I'm alive" signals | `heartbeats/` | Each program touches a file regularly; the green dots in the top bar come from these. |
-| Your repository | `projects/<id>/repo` | Foreman's own clone, on the milestone branch (e.g. `foreman/m1`). |
+| Your repository | `projects/<id>/repo` | ai-factory's own clone, on the milestone branch (e.g. `ai-factory/m1`). |
 | One clone per task | `projects/<id>/tasks/<task>` | Each task works on its own branch in its own copy, so a messy attempt never affects anything else. |
 | Run logs and prompts | `runs/` | What each agent was given (its "context pack"), everything it printed, and the test results files. |
 
@@ -156,7 +156,7 @@ Everything lives under the data directory (`./data` by default):
    work into tasks. A task is plain language: a title, a goal, the
    requirements it covers, a few "done when" criteria, which tasks must come
    first, and a size. No file lists and no commands: deciding how to test
-   and build it is the Tester's and Builder's job. Foreman adds three
+   and build it is the Tester's and Builder's job. ai-factory adds three
    standard tasks to every plan:
    - **Project setup** (first): the project skeleton, the test runner, and a
      first `README.md` and `ARCHITECTURE.md`;
@@ -166,7 +166,7 @@ Everything lives under the data directory (`./data` by default):
      commands, inputs and outputs), never through function names they would
      have to guess. They fail until the project is finished, so they run on their
      own (`tests/acceptance/run.sh`) and stay out of `tests/run.sh`, the
-     suite every task must pass; Foreman fails the task if they don't. If an
+     suite every task must pass; ai-factory fails the task if they don't. If an
      older project's runner still includes them, their results never count
      for a task, and every task's briefing says to leave them alone;
    - **Documentation** (last): `README.md` (what the project is, how to run
@@ -175,13 +175,13 @@ Everything lives under the data directory (`./data` by default):
 3. **Review the plan** (on by default). You see the tasks before anything
    runs, and can edit, remove or approve them.
 4. **Prepare the environment.** The Environment Agent reads the documents
-   and the approved tasks, and writes `.foreman/Dockerfile` and
-   `.foreman/check.sh` (one command per tool, proving it is installed).
-   Like the planners it has no tools: Foreman builds the image on the host,
+   and the approved tasks, and writes `.ai-factory/Dockerfile` and
+   `.ai-factory/check.sh` (one command per tool, proving it is installed).
+   Like the planners it has no tools: ai-factory builds the image on the host,
    runs the check inside it as the agent user with no network, and shows
    the agent any failure to fix (three tries, then you decide: try again
    with a note, or skip). The files are committed only once both pass. From
-   then on every step of every task runs in that image, and `.foreman/` is
+   then on every step of every task runs in that image, and `.ai-factory/` is
    read-only to the Tester and Builder, whose briefings list what it
    provides. The agent runs again when you press *Rebuild environment*, or
    after going back to planning if the requirements or design changed. (No
@@ -205,8 +205,8 @@ Everything lives under the data directory (`./data` by default):
 You never say how a task is tested: every task gets tests, written by the
 Tester from its criteria.
 
-1. **Get ready.** Foreman gives the task its own clone of the milestone
-   branch and, if the project has a `.foreman/Dockerfile`, makes sure its
+1. **Get ready.** ai-factory gives the task its own clone of the milestone
+   branch and, if the project has a `.ai-factory/Dockerfile`, makes sure its
    toolchain image is built. A later attempt reuses the clone, keeping the
    work so far, and first merges in whatever other tasks have merged since,
    so the task builds on the latest code and its own merge stays clean. If
@@ -214,7 +214,7 @@ Tester from its criteria.
    at once and the inbox asks you to start it over or resolve the conflict.
 2. **Tester step.** The Tester gets a briefing (the task's goal and criteria,
    the requirements it covers, the relevant part of the design, an outline
-   of the code, the existing tests) and writes tests for the task. Foreman
+   of the code, the existing tests) and writes tests for the task. ai-factory
    commits, checks that only test files changed, then runs the whole suite.
    The new tests are expected to fail at this point: nothing implements them
    yet, and at least one must: tests that already pass test something that
@@ -224,17 +224,17 @@ Tester from its criteria.
    tests in full, and writes code until the tests pass. It can run the tests
    but not change them, nor the test configuration (`conftest.py`, the
    pytest and coverage sections of `pyproject.toml`, jest config and the
-   like) outside the setup task, since that could skip a test. Foreman
+   like) outside the setup task, since that could skip a test. ai-factory
    commits, checks that no test or test configuration changed and that the
    change isn't suspiciously large. If an older test contradicts the task's
    tests, the Builder reports it instead, and the task goes back to the
    Tester with the report (once; a second report fails the attempt). You can
    also send a failed or stopped task back to the Tester yourself, with a
    note it will see.
-4. **Verify.** Foreman runs the whole suite on the result, inside the
+4. **Verify.** ai-factory runs the whole suite on the result, inside the
    sandbox, and records every test's result and the code coverage. Any
    failure fails the step.
-5. **Coverage check.** Foreman works out how many of the lines the Builder
+5. **Coverage check.** ai-factory works out how many of the lines the Builder
    added or changed were run by the tests ("changed-line coverage"). Below
    the project's minimum (80% by default), the task goes back to the Tester
    once to add tests, told the coverage and which files need it most; if it
@@ -254,16 +254,16 @@ from the step that failed, so a Builder retry keeps the Tester's tests.
 
 ## Tests and coverage
 
-Foreman doesn't care what language or test framework a project uses. The
+ai-factory doesn't care what language or test framework a project uses. The
 Tester sets up one script, `tests/run.sh`, that runs the whole suite and
-writes two standard files into a results folder Foreman provides
-(`$FOREMAN_RESULTS`):
+writes two standard files into a results folder ai-factory provides
+(`$AI_FACTORY_RESULTS`):
 
 - `junit.xml`: the result of every test (JUnit XML, which pytest, Jest, Go,
   Cargo, Maven and most others can produce);
 - `coverage.xml` (Cobertura) or `lcov.info`: which lines the tests ran.
 
-Foreman reads these after every run and keeps them, so you can review test
+ai-factory reads these after every run and keeps them, so you can review test
 results:
 
 - **on each task** (the Tests tab): the task's own tests, red after the
@@ -278,7 +278,7 @@ results:
 Agents are given real freedom inside their box, so the box matters.
 
 **The sandbox.** Each step runs in a fresh Docker container (on macOS, inside
-a small Lima VM that `foreman vm start` manages), built from
+a small Lima VM that `ai-factory vm start` manages), built from
 Ubuntu 24.04, as an unprivileged user, with limited CPU and memory. It sees
 only two things from your machine: the task's clone (read-write) and its
 briefing (read-only), with the code or the tests also read-only depending
@@ -287,10 +287,10 @@ API keys.
 
 **No way out but the gateway.** Containers sit on an internal Docker network
 with no internet, no LAN and no access to your machine. The only thing on
-that network is a tiny relay to Foreman's model gateway. A project that
+that network is a tiny relay to ai-factory's model gateway. A project that
 genuinely needs internet in its tasks can switch to an "open" network.
 Packages a project needs are installed in its toolchain image, which the
-Environment Agent writes and Foreman builds, with network access, before any
+Environment Agent writes and ai-factory builds, with network access, before any
 agent runs.
 
 **The model gateway.** Each attempt gets a secret address for its model that
@@ -377,7 +377,7 @@ setting is used for both planners, and an old "executor" setting for the
 Tester and the Builder.
 
 Each node has a **capacity**: how many task steps and planning calls it
-serves at once. Work waits for a free slot. Foreman checks every node's
+serves at once. Work waits for a free slot. ai-factory checks every node's
 health once a minute and gives no new work to one that is down.
 
 **Avoiding model swaps.** When a node is an
@@ -386,9 +386,9 @@ each machine's memory and are loaded on demand. An agent's step sends many
 requests with pauses between them while its tools run, and ai-swap only
 protects a model while a request is in flight. Two steps on one machine whose
 models don't fit together would swap each other out on almost every turn
-(about 25 s each on a 32 GB GPU, minutes for a 150 GB model). Foreman knows a
+(about 25 s each on a 32 GB GPU, minutes for a 150 GB model). ai-factory knows a
 step uses its model from start to finish, so every few seconds it reads which
-models each machine has loaded (`foreman/residency.py`) and:
+models each machine has loaded (`ai-factory/residency.py`) and:
 
 - starts work whose model is loaded, or fits in free memory, as usual;
 - holds back work whose model would push out a model that a running step or
@@ -396,7 +396,7 @@ models each machine has loaded (`foreman/residency.py`) and:
   models, least recently used first), with one event in the activity feed
   saying which model and project it is waiting for;
 - starts work whose model is already loaded first;
-- after `FOREMAN_SWAP_WAIT_S` (30 minutes) of waiting, starts anyway.
+- after `AI_FACTORY_SWAP_WAIT_S` (30 minutes) of waiting, starts anyway.
 
 A project's Settings page also warns when two of its agents' models share a
 machine but don't fit in it together, since each hand-over between them would
@@ -404,15 +404,15 @@ then swap models. Nodes that aren't ai-swap endpoints are unaffected.
 
 The planners are called directly by the orchestrator. The Project
 Planner's web research uses Claude's built-in web search when it runs on
-Claude; on a local model it uses a search server you point Foreman at
-(`FOREMAN_SEARCH_URL`, a SearXNG instance), and Foreman only fetches public
+Claude; on a local model it uses a search server you point ai-factory at
+(`AI_FACTORY_SEARCH_URL`, a SearXNG instance), and ai-factory only fetches public
 pages for it. Coding agents only ever reach their model through the gateway,
 which speaks both the OpenAI chat format (local servers) and Claude's own
 format.
 
 ## When something goes wrong
 
-If Foreman crashes or the machine restarts, nothing is left half-done. On
+If ai-factory crashes or the machine restarts, nothing is left half-done. On
 start-up the orchestrator:
 
 - marks any attempt that was running as failed, with a reason, and the
@@ -430,32 +430,32 @@ Each repair is logged in the project's activity feed.
 | Area | Code |
 |---|---|
 | Dashboard (React) | `web/src/` |
-| API (FastAPI) | `src/foreman/api/` |
-| Orchestrator loop and scheduling | `src/foreman/orchestrator/main.py` |
-| Agent roles and what each may do | `src/foreman/core/roles.py` |
-| One task, Tester step to merge | `src/foreman/orchestrator/runner.py` |
-| Planning jobs (chat, breakdown, split, review) | `src/foreman/orchestrator/jobs.py`, `src/foreman/planner.py` |
-| Test results and coverage | `src/foreman/testresults.py` |
-| Web research for the Project Planner | `src/foreman/research.py` |
-| Escalation ladder | `src/foreman/orchestrator/escalation.py` |
-| Replanning after each task | `src/foreman/orchestrator/replan.py` |
-| Acceptance check and pull request | `src/foreman/orchestrator/milestone.py` |
-| Carrying out inbox decisions | `src/foreman/orchestrator/gate_actions.py` |
-| Supervisor (Stop / E-stop) | `src/foreman/supervisor/main.py` |
-| Model gateway | `src/foreman/gateway.py` |
-| Containers and the locked-down network | `src/foreman/sandbox.py` |
-| Toolchain images | `src/foreman/images.py` |
-| The Environment Agent | `src/foreman/orchestrator/environment.py` |
-| Context packs | `src/foreman/core/contextpack.py` |
-| Watchdog limits | `src/foreman/core/watchdog.py` |
-| Checkpoints and notifications | `src/foreman/core/gates.py` |
-| Spend and caps | `src/foreman/core/spend.py` |
-| Task states and safe state changes | `src/foreman/core/state.py` |
-| Database tables | `src/foreman/core/models.py` |
-| Git operations | `src/foreman/gitops.py` |
-| Talking to models (planners) | `src/foreman/llm.py` |
-| Coding agents | `src/foreman/executors/` |
-| Settings (environment variables) | `src/foreman/config.py` |
+| API (FastAPI) | `src/ai_factory/api/` |
+| Orchestrator loop and scheduling | `src/ai_factory/orchestrator/main.py` |
+| Agent roles and what each may do | `src/ai_factory/core/roles.py` |
+| One task, Tester step to merge | `src/ai_factory/orchestrator/runner.py` |
+| Planning jobs (chat, breakdown, split, review) | `src/ai_factory/orchestrator/jobs.py`, `src/ai_factory/planner.py` |
+| Test results and coverage | `src/ai_factory/testresults.py` |
+| Web research for the Project Planner | `src/ai_factory/research.py` |
+| Escalation ladder | `src/ai_factory/orchestrator/escalation.py` |
+| Replanning after each task | `src/ai_factory/orchestrator/replan.py` |
+| Acceptance check and pull request | `src/ai_factory/orchestrator/milestone.py` |
+| Carrying out inbox decisions | `src/ai_factory/orchestrator/gate_actions.py` |
+| Supervisor (Stop / E-stop) | `src/ai_factory/supervisor/main.py` |
+| Model gateway | `src/ai_factory/gateway.py` |
+| Containers and the locked-down network | `src/ai_factory/sandbox.py` |
+| Toolchain images | `src/ai_factory/images.py` |
+| The Environment Agent | `src/ai_factory/orchestrator/environment.py` |
+| Context packs | `src/ai_factory/core/contextpack.py` |
+| Watchdog limits | `src/ai_factory/core/watchdog.py` |
+| Checkpoints and notifications | `src/ai_factory/core/gates.py` |
+| Spend and caps | `src/ai_factory/core/spend.py` |
+| Task states and safe state changes | `src/ai_factory/core/state.py` |
+| Database tables | `src/ai_factory/core/models.py` |
+| Git operations | `src/ai_factory/gitops.py` |
+| Talking to models (planners) | `src/ai_factory/llm.py` |
+| Coding agents | `src/ai_factory/executors/` |
+| Settings (environment variables) | `src/ai_factory/config.py` |
 
 ## Why it's built this way
 
@@ -479,8 +479,8 @@ Each repair is logged in the project's activity feed.
 - **One writer per repository.** Only the orchestrator touches clones, and
   every task works in its own copy, so attempts can't trample each other.
 - **Every state change is a careful swap.** A task only moves from the state
-  Foreman expects to the next one, so a Stop that lands mid-step is never
+  ai-factory expects to the next one, so a Stop that lands mid-step is never
   overwritten by a late "success".
-- **Plain files and SQLite.** No servers to run besides Foreman itself;
+- **Plain files and SQLite.** No servers to run besides ai-factory itself;
   everything is inspectable with ordinary tools, and the planning documents
   live in your repository next to the code.

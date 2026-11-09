@@ -35,7 +35,7 @@ function TokenPrompt({ onSaved }: { onSaved: () => void }) {
   return (
     <div className="card narrow">
       <h2>API token required</h2>
-      <p className="muted">This server was started with FOREMAN_TOKEN. Enter it to continue.</p>
+      <p className="muted">This server was started with AI_FACTORY_TOKEN. Enter it to continue.</p>
       <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
       <button
         className="btn primary"
@@ -57,7 +57,10 @@ export default function App() {
   return (
     <div className={`app ${sys?.estop ? "estop-on" : ""}`}>
       <header className="topbar">
-        <div className="brand">Foreman</div>
+        <NavLink to="/" className="brand" end>
+          <img src="/favicon.svg" alt="" />
+          ai-factory
+        </NavLink>
         <nav>
           <NavLink to="/" end>
             Projects

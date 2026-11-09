@@ -4,8 +4,8 @@ import threading
 
 import pytest
 
-from foreman.core.models import Node
-from foreman.llm import Aborted, LLMError, stream_chat
+from ai_factory.core.models import Node
+from ai_factory.llm import Aborted, LLMError, stream_chat
 from tests.fakellm import FakeLLM, last_user_text, system_text
 
 
@@ -96,7 +96,7 @@ async def test_unknown_provider():
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
 async def test_list_models(llm, provider):
-    from foreman.llm import list_models
+    from ai_factory.llm import list_models
 
     base = llm.url if provider == "openai" else llm.url.removesuffix("/v1")
     expected = (
@@ -110,7 +110,7 @@ async def test_list_models(llm, provider):
 
 
 def test_output_budget_uses_the_context_window():
-    from foreman.llm import ANTHROPIC_MAX_TOKENS, MIN_OUTPUT_TOKENS, output_budget
+    from ai_factory.llm import ANTHROPIC_MAX_TOKENS, MIN_OUTPUT_TOKENS, output_budget
 
     local = Node(name="n", base_url="x", context_window=65536)
     prompt = [{"role": "user", "content": "x" * 40_000}]  # ~10k tokens

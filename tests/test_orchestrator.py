@@ -2,10 +2,10 @@
 
 from sqlmodel import select
 
-from foreman import gitops
-from foreman.core.models import Event, RunState, TaskRun, TaskState
-from foreman.db import session
-from foreman.orchestrator.main import Orchestrator, recover
+from ai_factory import gitops
+from ai_factory.core.models import Event, RunState, TaskRun, TaskState
+from ai_factory.db import session
+from ai_factory.orchestrator.main import Orchestrator, recover
 from tests.helpers import TERMINAL, drive, make_project, make_task, task
 
 
@@ -64,7 +64,7 @@ async def test_timeout(client, origin):
     p = make_project(client, origin)
     t = make_task(client, p["id"], script="sleep 60", timeout_s=10)
     # Shorten after creation (API enforces >= 10s).
-    from foreman.core.models import Task
+    from ai_factory.core.models import Task
 
     with session() as s:
         row = s.get(Task, t["id"])
@@ -140,7 +140,7 @@ async def test_one_active_task_per_project(client, origin):
 
 async def test_node_capacity_respected(client, origin):
     """V4.3: with capacity 1, only one opencode task runs on the node at a time."""
-    from foreman.orchestrator.main import pick_ready
+    from ai_factory.orchestrator.main import pick_ready
 
     n = client.post(
         "/api/nodes", json={"name": "n", "base_url": "http://x/v1", "capacity": 1}
@@ -183,8 +183,8 @@ async def test_retry_keeps_partial_work_and_passes_failure_reason(client, origin
 
 async def test_recover_marks_orphaned_runs_failed(client, origin):
     """V9.1: after a crash nothing stays 'running'."""
-    from foreman.core.models import Task
-    from foreman.core.state import transition
+    from ai_factory.core.models import Task
+    from ai_factory.core.state import transition
 
     p = make_project(client, origin)
     t = make_task(client, p["id"], script="true")

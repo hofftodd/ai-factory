@@ -1,8 +1,8 @@
 import pytest
 
-from foreman.core.models import Project, Task, TaskState
-from foreman.core.state import can_transition, estop_active, set_flag, transition
-from foreman.db import session
+from ai_factory.core.models import Project, Task, TaskState
+from ai_factory.core.state import can_transition, estop_active, set_flag, transition
+from ai_factory.db import session
 
 
 def _task() -> int:

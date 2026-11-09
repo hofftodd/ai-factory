@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         # Hosted macOS runners can't run a Docker VM, so the Docker tests skip
-        # themselves there; run them on a Mac with `foreman vm start`.
+        # themselves there; run them on a Mac with `ai-factory vm start`.
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -32,10 +32,10 @@ jobs:
         run: npm ci && npm run build
       - name: Build the executor image
         if: runner.os == 'Linux'
-        run: uv run foreman build-image
+        run: uv run ai-factory build-image
       - name: Check the host
         if: runner.os == 'Linux'
-        run: uv run foreman doctor
+        run: uv run ai-factory doctor
       - run: uv run pytest -q
 
   e2e:
@@ -53,5 +53,5 @@ jobs:
       - run: uv sync
       - working-directory: web
         run: npm ci && npx playwright install --with-deps chromium
-      - run: uv run foreman build-image
+      - run: uv run ai-factory build-image
       - run: scripts/e2e.sh

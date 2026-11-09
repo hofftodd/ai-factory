@@ -1,8 +1,8 @@
 from sqlmodel import select
 
-from foreman.core.models import Control
-from foreman.core.state import estop_active
-from foreman.db import control_session
+from ai_factory.core.models import Control
+from ai_factory.core.state import estop_active
+from ai_factory.db import control_session
 from tests.helpers import make_project, make_task, project, task
 
 
@@ -93,7 +93,7 @@ def test_control_validation(client):
 
 
 def test_token_auth(client, monkeypatch):
-    monkeypatch.setenv("FOREMAN_TOKEN", "s3cret")
+    monkeypatch.setenv("AI_FACTORY_TOKEN", "s3cret")
     assert client.get("/api/system").status_code == 401
     assert client.get("/api/system", headers={"Authorization": "Bearer s3cret"}).status_code == 200
     assert client.get("/api/system?token=s3cret").status_code == 200
@@ -109,7 +109,7 @@ def test_events_endpoint(client, origin):
 
 
 def test_github_token_from_dashboard(client, monkeypatch):
-    monkeypatch.setenv("FOREMAN_GITHUB_TOKEN", "ghp_from_env_1111")
+    monkeypatch.setenv("AI_FACTORY_GITHUB_TOKEN", "ghp_from_env_1111")
     assert client.get("/api/settings/github").json() == {
         "configured": True,
         "source": "environment",
@@ -119,7 +119,7 @@ def test_github_token_from_dashboard(client, monkeypatch):
     assert r.json() == {"configured": True, "source": "dashboard", "hint": "2222"}
     assert "ghp_from_ui" not in r.text
     assert "ghp_from_ui" not in client.get("/api/settings/github").text
-    from foreman.core.state import github_token
+    from ai_factory.core.state import github_token
 
     assert github_token() == ("ghp_from_ui_2222", "dashboard")  # what git and the PR call use
     assert client.put("/api/settings/github", json={"token": ""}).status_code == 422
@@ -127,7 +127,7 @@ def test_github_token_from_dashboard(client, monkeypatch):
 
 
 def test_github_token_check(client, monkeypatch):
-    from foreman import github
+    from ai_factory import github
 
     assert client.post("/api/settings/github/check").status_code == 400
     seen = []

@@ -1,4 +1,4 @@
-# Foreman
+# <img src="web/public/favicon.svg" width="40" alt="" align="top"> ai-factory
 
 A self-hosted dashboard that takes a GitHub project through a spec-driven
 SDLC with AI agents: interactive specification, then autonomous execution of
@@ -31,7 +31,7 @@ the agents working through the tasks. More in [Screenshots](#screenshots).*
 |---|---|---|
 | **Project Planning Agent** | Talks with you; writes the requirements, design and acceptance criteria as human-readable markdown; researches unfamiliar topics on the web | Write code, tests, commands or tasks |
 | **Task Planning Agent** | Reads the documents; breaks the work into plain-language tasks (goal, "done when" criteria, dependencies, size); reviews the plan after each task | Write documents, code or tests; name files or commands |
-| **Environment Agent** | Once the plan is approved, writes the toolchain image (`.foreman/Dockerfile`) and a check script proving every tool the project needs is installed; Foreman builds and checks it before any task runs | Write code, tests or documents |
+| **Environment Agent** | Once the plan is approved, writes the toolchain image (`.ai-factory/Dockerfile`) and a check script proving every tool the project needs is installed; ai-factory builds and checks it before any task runs | Write code, tests or documents |
 | **Tester Agent** | Writes each task's tests before the code exists, the acceptance tests, and the test runner; runs tests | Change anything outside the test folders |
 | **Builder Agent** | Writes the code (plus `README.md` and `ARCHITECTURE.md`) until the tests pass; runs the tests | Change any test or the toolchain image |
 
@@ -61,9 +61,9 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
 4. **Review the plan** (optional checkpoint, on by default). Edit, drop or
    re-run tasks. `tasks.md` is committed alongside the documents.
 5. **Prepare the environment.** The Environment Agent reads the documents
-   and the approved tasks and writes `.foreman/Dockerfile` (the language,
-   test framework, coverage and build tools) plus `.foreman/check.sh`.
-   Foreman builds the image on the host, runs the check inside it without
+   and the approved tasks and writes `.ai-factory/Dockerfile` (the language,
+   test framework, coverage and build tools) plus `.ai-factory/check.sh`.
+   ai-factory builds the image on the host, runs the check inside it without
    network, and sends any errors back to the agent (three tries, then it
    asks you: try again with a note, or skip). Only then does any task
    start. Every agent of every task works in that one image, and none of
@@ -92,9 +92,9 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      produce. The task page's Tests tab shows its tests red then green and
      the coverage of its changes; the project page shows the latest suite,
      the acceptance tests and coverage over time.
-   - **Toolchain.** Containers start from `foreman/executor-base` (Ubuntu,
+   - **Toolchain.** Containers start from `ai-factory/executor-base` (Ubuntu,
      git, pi and OpenCode, no language runtimes on PATH). The Environment
-     Agent's `.foreman/Dockerfile` (`FROM foreman/executor-base`) is built
+     Agent's `.ai-factory/Dockerfile` (`FROM ai-factory/executor-base`) is built
      into a per-project image and reused until it changes; agents, tests and
      acceptance checks run in it. Builds can be stopped like any task.
    - **Network.** Executor containers run as an unprivileged user on an
@@ -106,7 +106,7 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      node has a capacity shared by task steps and planning calls, and is
      health-checked every minute; work waits for a free slot on a healthy
      node.
-   - **Watchdog.** Coding agents reach their model only through Foreman's
+   - **Watchdog.** Coding agents reach their model only through ai-factory's
      *model gateway*, which counts calls and tokens against per-step
      budgets, stops an agent that keeps returning the same response, and
      adds the node's API key itself (keys never enter containers). Hitting a
@@ -265,46 +265,46 @@ Lima VM below.
 ```bash
 uv sync                          # Python deps
 (cd web && npm ci && npm run build)   # dashboard
-uv run foreman vm start          # macOS only: the Lima VM containers run in
-uv run foreman build-image       # foreman/executor-base (ubuntu:24.04 + git + pi + opencode)
+uv run ai-factory vm start          # macOS only: the Lima VM containers run in
+uv run ai-factory build-image       # ai-factory/executor-base (ubuntu:24.04 + git + pi + opencode)
                                  # add --with-aider to include Aider as well
-uv run foreman doctor            # checks Docker, the image, mounts and gateway reachability
-uv run foreman up                # api + orchestrator + supervisor
+uv run ai-factory doctor            # checks Docker, the image, mounts and gateway reachability
+uv run ai-factory up                # api + orchestrator + supervisor
 ```
 
 ### Hosting on macOS
 
-Foreman itself runs natively on the Mac; its containers run in a small Linux
-VM that Foreman manages with [Lima](https://lima-vm.io):
+ai-factory itself runs natively on the Mac; its containers run in a small Linux
+VM that ai-factory manages with [Lima](https://lima-vm.io):
 
 ```bash
 brew install lima
-uv run foreman vm start          # creates the VM on first use, then starts it
-uv run foreman vm status         # state, size, mounts
+uv run ai-factory vm start          # creates the VM on first use, then starts it
+uv run ai-factory vm status         # state, size, mounts
 ```
 
 The VM uses Apple's virtualization framework with virtiofs, runs rootful
-Docker, and can see exactly one host directory: `FOREMAN_DATA_DIR`, mounted
+Docker, and can see exactly one host directory: `AI_FACTORY_DATA_DIR`, mounted
 writable at the same path. Nothing else from your home directory is visible
-to it. Foreman finds the VM's Docker socket on its own. Size it with
-`FOREMAN_VM_CPUS` / `FOREMAN_VM_MEMORY_GIB` before the first start (the
+to it. ai-factory finds the VM's Docker socket on its own. Size it with
+`AI_FACTORY_VM_CPUS` / `AI_FACTORY_VM_MEMORY_GIB` before the first start (the
 default leaves most of the machine to your model servers); if you move the
-data directory, `foreman vm delete` and start again.
+data directory, `ai-factory vm delete` and start again.
 
 Docker Desktop, OrbStack or colima work too: point `DOCKER_HOST` (or
-`FOREMAN_DOCKER_HOST`) at them, or just leave Docker Desktop's default
-context active, and run `foreman doctor`.
+`AI_FACTORY_DOCKER_HOST`) at them, or just leave Docker Desktop's default
+context active, and run `ai-factory doctor`.
 
 Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
 
 - Local servers are "OpenAI-compatible", e.g. `http://192.168.1.20:8080/v1`
   for llama.cpp, or `http://127.0.0.1:1234/v1` for a server on the same
-  machine (Foreman's gateway connects to it, not the container). Set the
+  machine (ai-factory's gateway connects to it, not the container). Set the
   context window the model really has: task sizes are computed from it.
 - Claude can be added with provider "Anthropic", base URL
   `https://api.anthropic.com` and your API key. Claude can fill any role: the
   planners call it directly (with Claude's web search for research), and coding agents (OpenCode) reach it through
-  Foreman's gateway, which adds the key on the host, so it never enters a
+  ai-factory's gateway, which adds the key on the host, so it never enters a
   sandbox. Enter its prices (USD per million input / output tokens) to track
   spend.
 - **Capacity** is how many task steps and planning calls a node serves at
@@ -321,8 +321,8 @@ escalations, Haiku writes the code.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-uv run foreman claude-nodes                 # nodes claude-opus / -sonnet / -haiku, with prices
-uv run foreman claude-nodes --project 3     # ...and assign them to project 3's roles
+uv run ai-factory claude-nodes                 # nodes claude-opus / -sonnet / -haiku, with prices
+uv run ai-factory claude-nodes --project 3     # ...and assign them to project 3's roles
 uv run python scripts/claude_smoke.py       # optional: a tiny project, idea to done, $3 cap
 ```
 
@@ -334,23 +334,23 @@ its Settings; nothing else changes.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FOREMAN_DATA_DIR` | `./data` | Databases, project clones, run logs |
-| `FOREMAN_HOST` / `FOREMAN_PORT` | `127.0.0.1` / `8700` | API bind address |
-| `FOREMAN_TOKEN` | *(empty)* | If set, required as `Authorization: Bearer …` |
-| `FOREMAN_RUNTIME` | `docker` | `local` runs executors as host processes (tests/dev only, **no isolation**) |
-| `FOREMAN_DOCKER_HOST` | *(empty)* | Docker socket for every docker command. Empty: `DOCKER_HOST`, else the Foreman Lima VM if it exists, else the docker CLI's current context |
-| `FOREMAN_VM_CPUS` / `FOREMAN_VM_MEMORY_GIB` | *(derived)* | Size of the Lima VM on macOS, at creation |
-| `FOREMAN_EXECUTOR_IMAGE` | `foreman/executor-base:latest` | Image for executor containers |
-| `FOREMAN_CONTAINER_CPUS` / `_MEMORY` | `2` / `4g` | Per-container limits |
-| `FOREMAN_STOP_GRACE_S` | `5` | SIGTERM → SIGKILL grace on Stop |
-| `FOREMAN_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config`. A token saved under **Settings** in the dashboard takes precedence |
-| `FOREMAN_NTFY_URL` | *(empty)* | Push notifications for the inbox, e.g. `https://ntfy.sh/my-secret-topic` |
-| `FOREMAN_PUBLIC_URL` | *(empty)* | Dashboard URL for links in notifications |
-| `FOREMAN_GATEWAY_HOST` / `_PORT` | `auto` / `8701` | Model gateway. `auto` listens only where containers arrive: the docker bridge address on Linux, loopback on macOS. Every URL also carries a per-run secret |
-| `FOREMAN_CONTAINER_HOST_IP` | `auto` | What `host.docker.internal` maps to inside containers: `host-gateway`, or Lima's host address (`192.168.5.2`) on Lima |
-| `FOREMAN_NODE_CHECK_S` | `60` | Seconds between node health checks (`0` disables them) |
-| `FOREMAN_SWAP_WAIT_S` | `1800` | On [ai-swap](https://github.com/hofftodd/ai-swap) nodes, the longest a task step or planner call waits rather than make a machine swap out a model other running work is using (`0` = no limit) |
-| `FOREMAN_SEARCH_URL` | *(empty)* | A [SearXNG](https://docs.searxng.org/) instance (JSON API) for the Project Planner's web research on local models. Claude uses its own web search |
+| `AI_FACTORY_DATA_DIR` | `./data` | Databases, project clones, run logs |
+| `AI_FACTORY_HOST` / `AI_FACTORY_PORT` | `127.0.0.1` / `8700` | API bind address |
+| `AI_FACTORY_TOKEN` | *(empty)* | If set, required as `Authorization: Bearer …` |
+| `AI_FACTORY_RUNTIME` | `docker` | `local` runs executors as host processes (tests/dev only, **no isolation**) |
+| `AI_FACTORY_DOCKER_HOST` | *(empty)* | Docker socket for every docker command. Empty: `DOCKER_HOST`, else the ai-factory Lima VM if it exists, else the docker CLI's current context |
+| `AI_FACTORY_VM_CPUS` / `AI_FACTORY_VM_MEMORY_GIB` | *(derived)* | Size of the Lima VM on macOS, at creation |
+| `AI_FACTORY_EXECUTOR_IMAGE` | `ai-factory/executor-base:latest` | Image for executor containers |
+| `AI_FACTORY_CONTAINER_CPUS` / `_MEMORY` | `2` / `4g` | Per-container limits |
+| `AI_FACTORY_STOP_GRACE_S` | `5` | SIGTERM → SIGKILL grace on Stop |
+| `AI_FACTORY_GITHUB_TOKEN` | *(empty)* | Used by the orchestrator to clone/push and to open milestone pull requests; never passed to executors or written to `.git/config`. A token saved under **Settings** in the dashboard takes precedence |
+| `AI_FACTORY_NTFY_URL` | *(empty)* | Push notifications for the inbox, e.g. `https://ntfy.sh/my-secret-topic` |
+| `AI_FACTORY_PUBLIC_URL` | *(empty)* | Dashboard URL for links in notifications |
+| `AI_FACTORY_GATEWAY_HOST` / `_PORT` | `auto` / `8701` | Model gateway. `auto` listens only where containers arrive: the docker bridge address on Linux, loopback on macOS. Every URL also carries a per-run secret |
+| `AI_FACTORY_CONTAINER_HOST_IP` | `auto` | What `host.docker.internal` maps to inside containers: `host-gateway`, or Lima's host address (`192.168.5.2`) on Lima |
+| `AI_FACTORY_NODE_CHECK_S` | `60` | Seconds between node health checks (`0` disables them) |
+| `AI_FACTORY_SWAP_WAIT_S` | `1800` | On [ai-swap](https://github.com/hofftodd/ai-swap) nodes, the longest a task step or planner call waits rather than make a machine swap out a model other running work is using (`0` = no limit) |
+| `AI_FACTORY_SEARCH_URL` | *(empty)* | A [SearXNG](https://docs.searxng.org/) instance (JSON API) for the Project Planner's web research on local models. Claude uses its own web search |
 
 ## Architecture
 
@@ -369,7 +369,7 @@ Three OS processes share two SQLite databases:
 - **supervisor**: executes Stop/E-stop. It kills containers/process groups
   first, then records the outcome.
 
-`foreman.db` holds projects, tasks, runs and events. `control.db` holds stop
+`ai-factory.db` holds projects, tasks, runs and events. `control.db` holds stop
 requests and the E-stop flag and is never written by the orchestrator, so a
 hung orchestrator holding a write lock cannot block a Stop.
 
@@ -378,11 +378,11 @@ which every attempt first brings up to date with the milestone branch,
 mounted at `/workspace` in the container, with the test folders read-only
 for the Builder, or everything but the test folders read-only for the
 Tester. The rendered prompt and tool config are mounted read-only at
-`/foreman`, and test results are written to `/foreman-results`. Nothing else
+`/ai-factory`, and test results are written to `/ai-factory-results`. Nothing else
 from the host is visible.
 
 Executor, validation and acceptance containers join the internal network
-`foreman-exec-<instance>`; a relay container, `foreman-gw-<instance>`, is the
+`ai-factory-exec-<instance>`; a relay container, `ai-factory-gw-<instance>`, is the
 only other member and forwards one port to the model gateway. Toolchain image
 builds use the normal build network.
 
@@ -392,8 +392,8 @@ builds use the normal build network.
 uv run pytest -q                 # unit, integration, multi-process stop tests;
                                  # Docker tests run when the image is present
 uv run pytest -q --basetemp="$PWD/data/pytest"   # on the Lima VM: test dirs must be
-                                 # inside FOREMAN_DATA_DIR, the only path the VM sees
-uv run foreman doctor            # engine, image, mounts, gateway, isolated network
+                                 # inside AI_FACTORY_DATA_DIR, the only path the VM sees
+uv run ai-factory doctor            # engine, image, mounts, gateway, isolated network
 uv run ruff check src tests && uv run mypy src
 (cd web && npm run dev)          # dashboard with hot reload, proxies /api to :8700
 scripts/e2e.sh                   # full stack + Playwright browser tests

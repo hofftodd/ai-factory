@@ -49,7 +49,7 @@ Status: **In progress** — M1, M2, M3 done · Implements: [spec.md](spec.md)
 ## 3. Package layout
 
 ```
-src/foreman/            # working package name
+src/ai_factory/            # working package name
   api/                  # FastAPI routers, SSE stream, static UI mount
   core/
     models.py           # SQLModel tables
@@ -68,7 +68,7 @@ src/foreman/            # working package name
   llm/router.py         # LiteLLM wrapper, role→endpoint, spend tracking
   gitops/               # clone, worktree, merge, PR
   supervisor/main.py
-docker/executor-base/   # Dockerfile for foreman/executor-base (ubuntu:24.04)
+docker/executor-base/   # Dockerfile for ai-factory/executor-base (ubuntu:24.04)
 web/                    # React app
 tests/
 specs/
@@ -159,14 +159,14 @@ Design changes made while building M1 (spec updated where relevant):
   to merge.
 - **Two databases.** Stop requests and the E-stop flag live in `control.db`,
   which the orchestrator only reads. Found by the frozen-orchestrator test
-  (V8.2): an orchestrator stopped mid-transaction holds `foreman.db`'s write
+  (V8.2): an orchestrator stopped mid-transaction holds `ai-factory.db`'s write
   lock, which previously blocked recording a Stop at all.
 - **Kill first, record second.** The supervisor kills processes before writing
   any state, and the runner consults `control.db` before advancing or failing
   a task, so a stop is never reported as a failure.
 - **Heartbeats are files** (mtime), so liveness never contends for a lock.
 - **Containers are labelled with an instance id** so the orphan sweep never
-  touches another foreman installation's containers on the same host.
+  touches another ai-factory installation's containers on the same host.
 - **One active task per project** in M1 (tasks merge into one milestone
   branch); parallelism comes from multiple projects and node capacity.
 - **Scope fence implemented early** (it was planned for M3): changes outside a
@@ -196,8 +196,8 @@ Design changes made while building M1 (spec updated where relevant):
   run's read-only control mount; cloud keys must go through a host-side proxy
   before cloud executors are allowed (NFR-5).
 - Per-project toolchain images: before a task attempt or acceptance check, the
-  orchestrator builds `.foreman/Dockerfile` (context: `.foreman/` only) into
-  `foreman/project-<instance>-<id>:<hash of Dockerfile + base image id>` and runs
+  orchestrator builds `.ai-factory/Dockerfile` (context: `.ai-factory/` only) into
+  `ai-factory/project-<instance>-<id>:<hash of Dockerfile + base image id>` and runs
   that step's containers from it; unchanged Dockerfiles reuse the image. A failed
   build is a `config` failure (blocks at once). Builds are killable by Stop like
   containers (`local:<pgid>` handle). Old images are not pruned yet.
@@ -211,7 +211,7 @@ Design changes made while building M1 (spec updated where relevant):
   `<<<ACCEPTANCE_CMD ... >>>`. Plain text blocks, rather than tool calls, so
   small local models can follow it. Writes are limited to
   `specs/<feature>/{spec,plan,validation}.md`, `tests/acceptance/**` and
-  `.foreman/Dockerfile`; anything else is refused and reported in the chat.
+  `.ai-factory/Dockerfile`; anything else is refused and reported in the chat.
   Current documents go in the system prompt on every turn, so the
   conversation history only carries the talk (and is trimmed oldest-first to
   fit the planner's window).
@@ -263,7 +263,7 @@ Design changes made while building M1 (spec updated where relevant):
 ## 10. M3 implementation notes
 
 - **Model gateway** (`gateway.py`, served by the orchestrator on
-  `FOREMAN_GATEWAY_PORT`). Each run gets a secret URL `/g/<token>/v1` as the
+  `AI_FACTORY_GATEWAY_PORT`). Each run gets a secret URL `/g/<token>/v1` as the
   executor's base URL; the gateway forwards to the node, adds the node's API
   key host-side (NFR-5 for node keys), counts requests and tokens (server
   usage when reported, else estimates), detects identical responses, and
@@ -327,21 +327,21 @@ Design changes made while building M1 (spec updated where relevant):
 
 ## 11. M4 part 1 implementation notes: macOS hosts, pi, egress
 
-**Hosts.** Foreman's processes run natively on Linux and macOS; containers run
-on whatever Docker engine `DOCKER_HOST` names. `foreman.engine` resolves the
-socket (`FOREMAN_DOCKER_HOST`, `DOCKER_HOST`, the managed Lima VM's socket,
+**Hosts.** ai-factory's processes run natively on Linux and macOS; containers run
+on whatever Docker engine `DOCKER_HOST` names. `ai_factory.engine` resolves the
+socket (`AI_FACTORY_DOCKER_HOST`, `DOCKER_HOST`, the managed Lima VM's socket,
 the CLI default) and how containers reach the host: executors always use the
 name `host.docker.internal`, mapped with `--add-host` to `host-gateway` (Linux,
 Docker Desktop, OrbStack) or `192.168.5.2` (Lima, colima: on Lima
 `host-gateway` is the VM). The gateway binds only where containers arrive:
-the docker bridge address on Linux, loopback on macOS (`FOREMAN_GATEWAY_HOST`
+the docker bridge address on Linux, loopback on macOS (`AI_FACTORY_GATEWAY_HOST`
 overrides; it used to be `0.0.0.0`). Every docker call, including the
 supervisor's kills, uses the resolved socket.
 
-**Lima VM** (`foreman vm start|stop|status|shell|delete`, `foreman.vm`): Lima's
-`docker-rootful` template, `vz` + virtiofs, mounting only `FOREMAN_DATA_DIR`,
+**Lima VM** (`ai-factory vm start|stop|status|shell|delete`, `ai_factory.vm`): Lima's
+`docker-rootful` template, `vz` + virtiofs, mounting only `AI_FACTORY_DATA_DIR`,
 writable, at the same path (bind mounts resolve inside the VM). Rootful so
-containers write the task clone as the user's own uid. `foreman doctor` runs
+containers write the task clone as the user's own uid. `ai-factory doctor` runs
 the real paths: engine, image, a container writing to the data dir, a
 container reaching the gateway address, and the isolated network.
 
@@ -350,18 +350,18 @@ container reaching the gateway address, and the isolated network.
 group that holds only zombies, which made Stop and timeouts crash on macOS.
 
 **Egress (FR-4.6).** Each instance has an internal network
-`foreman-exec-<instance>` and a relay container `foreman-gw-<instance>` (socat,
+`ai-factory-exec-<instance>` and a relay container `ai-factory-gw-<instance>` (socat,
 read-only, no capabilities) on that network and the default bridge,
 forwarding one port to the gateway. Executors, validation and acceptance run
-on the internal network and reach the gateway as `http://foreman-gw:8701`;
-nothing else resolves or routes. The relay carries no `foreman.run` label, so
+on the internal network and reach the gateway as `http://ai-factory-gw:8701`;
+nothing else resolves or routes. The relay carries no `ai-factory.run` label, so
 Stop and the orphan sweep leave it alone; it is recreated when the gateway
 port changes and removed when the orchestrator exits. `Project.network`
 ("isolated" default, "open") is the per-project escape hatch. Existing
 projects become isolated on upgrade.
 
-**pi executor.** `foreman.executors.pi`: a generated `models.json` registers
-the gateway as provider `foreman` (`openai-completions`, dummy key, the
+**pi executor.** `ai_factory.executors.pi`: a generated `models.json` registers
+the gateway as provider `ai-factory` (`openai-completions`, dummy key, the
 node's context window); pi runs with `--mode json --no-session --offline`
 and every discovery feature off, including `AGENTS.md` (the context pack is
 the agent's whole context). pi exits 0 when model calls fail, so executors
@@ -381,7 +381,7 @@ context budget is now `pct × (window − overhead)`.
 | pi end to end | ✅ `test_executor_against_fake_model[pi]`, `test_spec_to_done_with_agent[pi]` (through the relay) |
 | pi loop tripped by the gateway | ✅ `test_pi_stuck_in_a_loop_is_stopped_by_the_watchdog` |
 | pi adapter and budgets | ✅ `tests/test_executors.py` |
-| Lima VM end to end | manual on a Mac: `foreman vm start && foreman doctor` (hosted macOS CI runners cannot run VMs) |
+| Lima VM end to end | manual on a Mac: `ai-factory vm start && ai-factory doctor` (hosted macOS CI runners cannot run VMs) |
 
 ### Known gaps
 
@@ -392,12 +392,12 @@ context budget is now `pct × (window − overhead)`.
 ## 12. M4 part 2 implementation notes: multi-node, spend, portfolio, Aider, Claude
 
 - **Egress lockdown**: built on both lines of work at once; the merged code
-  uses part 1's design (§11: `foreman-exec-<instance>` network, `foreman-gw`
+  uses part 1's design (§11: `ai-factory-exec-<instance>` network, `ai-factory-gw`
   relay, `Project.network` "isolated" | "open"). Projects saved with this
   line's earlier name for it, "gateway", are renamed to "isolated" on start.
 - **Toolchain images** (`images.py`, merged from the `local-node-and-toolchains`
-  branch): `.foreman/Dockerfile` must build `FROM foreman/executor-base`
-  (checked, so agents stay unprivileged). Only `.foreman/` is the build context.
+  branch): `.ai-factory/Dockerfile` must build `FROM ai-factory/executor-base`
+  (checked, so agents stay unprivileged). Only `.ai-factory/` is the build context.
   The image is tagged by a hash of the Dockerfile, the files it COPYs/ADDs and
   the base image id, built before each attempt and acceptance check if missing
   (builds have network; tasks don't; Stop kills a build), and used for every
@@ -405,7 +405,7 @@ context budget is now `pct × (window − overhead)`.
   failure.
 - **Multi-node scheduling** (`orchestrator/main.py`): node load = running
   task attempts + running planner jobs; both count against `Node.capacity`.
-  Nodes are health-checked every `FOREMAN_NODE_CHECK_S` (model list fetch,
+  Nodes are health-checked every `AI_FACTORY_NODE_CHECK_S` (model list fetch,
   15 s timeout); a node whose last check failed gets no new work, and
   "unreachable" / "back" transitions are logged as events. A node never
   checked gets the benefit of the doubt. `/api/nodes` reports `active` and
@@ -428,9 +428,9 @@ context budget is now `pct × (window − overhead)`.
   split tasks leave the plan. The chart has a crosshair tooltip, direct
   labels, a legend and a table view.
 - **Aider** (`executors/aider.py`): optional in the base image
-  (`foreman build-image --with-aider`). One-shot `--message-file` run against
+  (`ai-factory build-image --with-aider`). One-shot `--message-file` run against
   the gateway, with the task's literal allowed files in the chat and its
-  context files read-only; Foreman commits. An executor command can exit 78
+  context files read-only; ai-factory commits. An executor command can exit 78
   (`EXIT_CONFIG`) to mean "can't work as configured" (e.g. Aider not
   installed), which blocks the task instead of retrying it.
 - **Crash recovery** (`recover()` on orchestrator start, NFR-2): besides
@@ -447,7 +447,7 @@ context budget is now `pct × (window − overhead)`.
   Aider stays OpenAI-compatible only (its tasks block with a clear message).
   Requests are adapted for current models (fixed thinking budgets → adaptive,
   sampling parameters dropped). Planner calls run at effort `high`.
-  `foreman claude-nodes` creates Opus / Sonnet / Haiku nodes with prices;
+  `ai-factory claude-nodes` creates Opus / Sonnet / Haiku nodes with prices;
   `scripts/claude_smoke.py` runs a capped idea-to-done project against them.
 
 ### Validation coverage after M4 part 2
@@ -495,7 +495,7 @@ from a diagram by the project owner; the mermaid version is in
   reply is refused). It may research: on Claude via the server-side
   `web_search` / `web_fetch` tools (`pause_turn` resumed up to 5 times); on
   OpenAI-compatible models via `web_search` / `web_fetch` function tools that
-  Foreman runs (`research.py`: SearXNG at `FOREMAN_SEARCH_URL`; fetch refuses
+  ai-factory runs (`research.py`: SearXNG at `AI_FACTORY_SEARCH_URL`; fetch refuses
   private, loopback and link-local addresses and doesn't follow redirects).
   Without a search service local models get no tools.
 - **Task Planner**: plain-language tasks `{key, title, goal, req_refs,
@@ -509,7 +509,7 @@ from a diagram by the project owner; the mermaid version is in
   binding, budget and context pack (`contextpack.build_role_pack`).
   - Mounts (`sandbox.StepSpec`): Tester gets a read-only workspace with
     writable test paths; Builder gets read-only test paths. Both get
-    `$FOREMAN_RESULTS` (`/foreman-results`).
+    `$AI_FACTORY_RESULTS` (`/ai-factory-results`).
   - Fences: after each step the diff is checked with `roles.fence` (test
     paths plus test-file name patterns such as `*_test.go`, `*.spec.ts`); a
     violation resets the step's changes and fails it (`failure_kind="fence"`).
@@ -520,7 +520,7 @@ from a diagram by the project owner; the mermaid version is in
     (`tests_ready`, `tests_commit`); "send back to Tester" on an escalation
     gate clears it.
 - **Test results** (`testresults.py`, `TestRun` / `TestCase`): JUnit XML plus
-  Cobertura or LCOV from `$FOREMAN_RESULTS`. A task's own tests are the cases
+  Cobertura or LCOV from `$AI_FACTORY_RESULTS`. A task's own tests are the cases
   in files its Tester changed. Changed-line coverage = instrumented lines added
   since the task's base that the tests hit. Below `Project.min_task_coverage`
   (default 80; 0 = report only) the task goes back to the Tester once, then a

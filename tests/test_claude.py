@@ -8,11 +8,11 @@ import json
 import httpx
 import pytest
 
-from foreman.core.models import Node, Project, Task, TaskRun, TaskState
-from foreman.db import session
-from foreman.executors import EXECUTORS
-from foreman.gateway import Gateway, new_token, serve
-from foreman.orchestrator.main import Orchestrator
+from ai_factory.core.models import Node, Project, Task, TaskRun, TaskState
+from ai_factory.db import session
+from ai_factory.executors import EXECUTORS
+from ai_factory.gateway import Gateway, new_token, serve
+from ai_factory.orchestrator.main import Orchestrator
 from tests.fakellm import FakeLLM
 from tests.helpers import TERMINAL, drive, make_project, make_task, project, task
 
@@ -117,7 +117,7 @@ async def test_tool_use_counts_and_charges(gw, llm):
 
 
 def test_cache_tokens_are_billed_at_their_rates():
-    from foreman.gateway import _claude_usage
+    from ai_factory.gateway import _claude_usage
 
     usage = {
         "input_tokens": 100,
@@ -143,9 +143,9 @@ def test_opencode_uses_its_anthropic_provider(tmp_path):
     cfg = json.loads((tmp_path / "opencode.json").read_text())
     assert cfg["model"] == "anthropic/claude-haiku-5-5"
     assert cfg["provider"] == {
-        "anthropic": {"options": {"baseURL": "http://gw/g/tok/v1", "apiKey": "foreman"}}
+        "anthropic": {"options": {"baseURL": "http://gw/g/tok/v1", "apiKey": "ai-factory"}}
     }
-    assert inv.env["FOREMAN_MODEL"] == "anthropic/claude-haiku-5-5"
+    assert inv.env["AI_FACTORY_MODEL"] == "anthropic/claude-haiku-5-5"
     assert "sk-" not in json.dumps(cfg) + json.dumps(inv.env)
 
 
@@ -169,7 +169,7 @@ async def test_claude_node_can_be_bound_as_executor_but_not_for_aider(client, or
 
 
 def test_claude_nodes_setup_binds_roles_and_is_idempotent(client, origin):
-    from foreman.claude_setup import setup
+    from ai_factory.claude_setup import setup
 
     p = make_project(client, origin)  # shell executor
     nodes = setup("sk-test", project_id=p["id"])
@@ -199,10 +199,10 @@ def test_claude_nodes_setup_binds_roles_and_is_idempotent(client, origin):
 def test_claude_nodes_cli_needs_the_key_in_the_environment(monkeypatch, capsys):
     import sys
 
-    from foreman import cli
+    from ai_factory import cli
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(sys, "argv", ["foreman", "claude-nodes"])
+    monkeypatch.setattr(sys, "argv", ["ai-factory", "claude-nodes"])
     with pytest.raises(SystemExit, match="ANTHROPIC_API_KEY"):
         cli.main()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-value")
