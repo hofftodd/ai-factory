@@ -50,8 +50,10 @@ from ai_factory.core.models import (
     JobState,
     Node,
     PlannerJob,
+    PlanRevision,
     Project,
     ProjectPhase,
+    SpecMessage,
     Task,
     TaskRun,
     TaskState,
@@ -417,8 +419,20 @@ def delete_project(project_id: int) -> None:
         ).first()
         if active:
             raise HTTPException(409, "project has running tasks; stop it first")
+        planning = s.exec(
+            select(PlannerJob).where(
+                PlannerJob.project_id == project_id,
+                col(PlannerJob.state).in_([JobState.QUEUED, JobState.RUNNING]),
+            )
+        ).first()
+        if planning:
+            raise HTTPException(409, "a planning job is running; stop it first")
         task_ids = [t.id for t in s.exec(select(Task).where(Task.project_id == project_id))]
-        s.exec(delete(Event).where(col(Event.project_id) == project_id))  # type: ignore[call-overload]
+        run_ids = [r.id for r in s.exec(select(TestRun).where(TestRun.project_id == project_id))]
+        # Everything that refers to the project goes first, or the foreign keys refuse the delete.
+        s.exec(delete(TestCase).where(col(TestCase.test_run_id).in_(run_ids)))  # type: ignore[call-overload]
+        for table in (TestRun, SpecMessage, PlannerJob, Gate, PlanRevision, Event):
+            s.exec(delete(table).where(col(table.project_id) == project_id))  # type: ignore[call-overload]
         s.exec(delete(TaskRun).where(col(TaskRun.task_id).in_(task_ids)))  # type: ignore[call-overload]
         s.exec(delete(Task).where(col(Task.project_id) == project_id))  # type: ignore[call-overload]
         s.exec(delete(Project).where(col(Project.id) == project_id))  # type: ignore[call-overload]
