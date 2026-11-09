@@ -53,7 +53,7 @@ test("specify, review the plan, execute", async ({ page, request }) => {
 
   // Approve -> decomposition -> plan review.
   await page.getByRole("button", { name: /Approve documents/ }).click();
-  await expect(page.getByRole("heading", { name: "Review the plan" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("main").getByRole("heading", { name: "Review the plan" })).toBeVisible({ timeout: 30_000 });
   // Setup, acceptance tests, the two planned tasks, documentation.
   await expect(page.locator(".proposed")).toHaveCount(5);
   await expect(page.locator(".proposed").first()).toContainText("Project setup");

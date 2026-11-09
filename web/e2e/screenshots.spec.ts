@@ -163,7 +163,7 @@ test("capture README screenshots", async ({ page, request }) => {
 
   // 1. Projects overview
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "todo-api" })).toBeVisible();
+  await expect(page.locator("main").getByRole("heading", { name: "todo-api" })).toBeVisible();
   await shot(page, "projects");
 
   // 2. Project board with a running task

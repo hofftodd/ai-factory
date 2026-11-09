@@ -134,6 +134,19 @@ def binding(project: Project, role: str) -> dict[str, Any]:
     return {}
 
 
+def choices(project: Project, role: str) -> list[tuple[int, str]]:
+    """The (node_id, model) pairs a role may run on, in order of preference: the binding's
+    own node and model, then its ``also`` list. Work goes to the first with a free slot."""
+    b = binding(project, role)
+    out: list[tuple[int, str]] = []
+    for c in (b, *(b.get("also") or [])):
+        if isinstance(c, dict) and c.get("node_id") is not None:
+            pair = (int(c["node_id"]), str(c.get("model") or ""))
+            if pair not in out:
+                out.append(pair)
+    return out
+
+
 def reasoning_effort(project: Project, task: Task, role: str) -> str:
     """The reasoning effort a coding agent's requests ask for ("" = the model's default).
     An escalated task runs on the escalation binding's node and model, so it uses that

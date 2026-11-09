@@ -92,6 +92,19 @@ def resolve_executor(
     return kind, node_id, model
 
 
+def executor_choices(
+    project: Project, task: Task, role: str = roles.BUILDER
+) -> list[tuple[int | None, str]]:
+    """Every (node id, model) a coding agent may run on, in order of preference. A node or
+    model set on the task (escalation) is the only choice; otherwise the role's binding and
+    its further choices."""
+    if task.node_id is not None or task.model:
+        _, node_id, model = resolve_executor(project, task, role)
+        return [(node_id, model)]
+    found: list[tuple[int | None, str]] = list(roles.choices(project, role))
+    return found or [(None, "")]
+
+
 def uses_pipeline(task: Task, executor: Executor) -> bool:
     """Agent tasks go Tester -> Builder; scripted shell tasks run their one script, unless
     it has a script per role (how ai-factory's tests drive the pipeline)."""
@@ -457,6 +470,11 @@ class TaskRunner:
         """(node, model, gateway endpoint) for the current run's agent. On an isolated
         network, also makes sure the executor network (and the gateway relay) exist."""
         kind, node_id, model = resolve_executor(project, task, role)
+        # The scheduler picked this run's node and model (the role may have several).
+        with session() as s:
+            run = s.get(TaskRun, self.run_id)
+            if run is not None and run.node_id is not None:
+                node_id, model = run.node_id, run.model or model
         node = None
         if node_id is not None:
             with session() as s:
@@ -659,26 +677,33 @@ class TaskRunner:
     async def _next_run(self, role: str, project: Project, task: Task) -> None:
         """Hand over to the next agent: a new run, on its own node and gateway token."""
         from ai_factory import residency
-        from ai_factory.orchestrator.main import node_available, node_load
+        from ai_factory.orchestrator.main import choose_node, node_load
 
         finish_run(self.run_id, RunState.SUCCEEDED, "step done")
-        _, node_id, model = resolve_executor(project, task, role)
-        # Wait for a free slot on the next agent's node, and (on ai-swap nodes) until its
-        # model can load without swapping out a model other running work is using.
+        options = executor_choices(project, task, role)
+        node_id, model = options[0]
+        # Wait for a free slot on one of the next agent's nodes, and (on ai-swap nodes) until
+        # its model can load without swapping out a model other running work is using.
         while node_id is not None:
+            ids = [n for n, _ in options if n is not None]
             with session() as s:
-                node = s.get(Node, node_id)
-            if node is None:
+                nodes = {n.id: n for n in s.exec(select(Node).where(col(Node.id).in_(ids)))}
+            if not nodes:
                 break
-            if node_available(node, node_load()):
-                reason = residency.blocker(node, model, residency.in_use())
+            pick, blocked = choose_node(options, nodes, node_load(), residency.in_use(), project)
+            if pick is not None:
+                node_id, model = pick
+                residency.hold("step", self.task_id, "", self.settings.swap_wait_s)
+                break
+            if blocked is not None:
                 waiting, first = residency.hold(
-                    "step", self.task_id, reason, self.settings.swap_wait_s
+                    "step", self.task_id, blocked[2], self.settings.swap_wait_s
                 )
                 if not waiting:
+                    node_id, model = blocked[0], blocked[1]
                     break
                 if first:
-                    emit(task.project_id, self.task_id, "system", f"{role} waiting: {reason}")
+                    emit(task.project_id, self.task_id, "system", f"{role} waiting: {blocked[2]}")
             self._check()
             await asyncio.sleep(1)
         with session() as s:

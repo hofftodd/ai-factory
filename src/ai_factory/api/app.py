@@ -164,12 +164,12 @@ def _check_bindings(bindings: dict[str, Any]) -> None:
     for role, binding in bindings.items():
         if role not in (*roles.BINDING_KEYS, "planner", "executor"):
             raise HTTPException(400, f"unknown role {role!r}")
-        node_id = (binding or {}).get("node_id")
-        if node_id is None:
-            continue
+        b = binding or {}
+        ids = [b.get("node_id"), *((x or {}).get("node_id") for x in b.get("also") or [])]
         with session() as s:
-            if s.get(Node, node_id) is None:
-                raise HTTPException(400, f"{role} node not found")
+            for node_id in ids:
+                if node_id is not None and s.get(Node, node_id) is None:
+                    raise HTTPException(400, f"{role} node not found")
 
 
 def _check_deps(project_id: int, deps: list[int], self_id: int | None = None) -> None:
@@ -687,8 +687,11 @@ async def list_machines() -> list[dict[str, Any]]:
     bound: dict[int, list[str]] = {}
     for p in projects:
         for b in (p.role_bindings or {}).values():
-            if isinstance(b, dict) and b.get("node_id") and b.get("model"):
-                bound.setdefault(int(b["node_id"]), []).append(str(b["model"]))
+            if not isinstance(b, dict):
+                continue
+            for c in (b, *(b.get("also") or [])):
+                if isinstance(c, dict) and c.get("node_id") and c.get("model"):
+                    bound.setdefault(int(c["node_id"]), []).append(str(c["model"]))
     endpoints: dict[str, Node] = {}
     for n in nodes:
         endpoints.setdefault(residency.root(n), n)
