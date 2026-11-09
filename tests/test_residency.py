@@ -8,7 +8,7 @@ import pytest
 from sqlmodel import col, select
 
 from ai_factory import residency
-from ai_factory.core.models import Event, Node, RunState, Task, TaskRun, TaskState
+from ai_factory.core.models import Event, Node, Project, RunState, Task, TaskRun, TaskState
 from ai_factory.db import session
 from ai_factory.orchestrator.main import pick_ready
 from tests.helpers import make_project, make_task
@@ -281,7 +281,7 @@ def test_conflicting_bindings_are_reported(client, fake_fetch):
     assert ok.json()["warnings"] == []
 
 
-def test_machines_group_nodes_by_the_computer_serving_their_model(client, fake_fetch):
+def test_machines_group_nodes_by_the_computer_serving_their_model(client, origin, fake_fetch):
     """The sidebar's Machines: ai-swap's computers, each with the nodes whose model it serves."""
     status = {
         "node": {
@@ -303,21 +303,36 @@ def test_machines_group_nodes_by_the_computer_serving_their_model(client, fake_f
     }
     listed = {"data": [{"id": "flint", "node": "studio"}, {"id": "thinkingcap", "node": "mini"}]}
     residency._views[SWAP] = residency._parse(status, listed)
-    for name, model in (("flint", "flint"), ("thinkingcap", "thinkingcap"), ("new", "gone")):
+    # As after a health check: every node lists everything the endpoint serves.
+    everything = ["flint", "thinkingcap"]
+    ids = {}
+    for name in ("flint", "thinkingcap", "new", "bound"):
         r = client.post(
-            "/api/nodes", json={"name": name, "base_url": SWAP + "/v1", "models": [model]}
+            "/api/nodes", json={"name": name, "base_url": SWAP + "/v1", "models": everything}
         )
         assert r.status_code == 201, r.text
+        ids[name] = r.json()["id"]
+    # A project's binding says which model a node is for, whatever its name.
+    pid = make_project(client, origin, name="p")["id"]
+    with session() as s:
+        p = s.get(Project, pid)
+        assert p is not None
+        p.role_bindings = {"tester": {"node_id": ids["bound"], "model": "thinkingcap"}}
+        s.add(p)
+        s.commit()
     r = client.post("/api/nodes", json={"name": "plain", "base_url": "http://box.lan:8000/v1"})
     assert r.status_code == 201, r.text
 
     got = {m["name"]: m for m in client.get("/api/machines").json()}
     assert set(got) == {"studio", "mini", "box.lan"}
     studio, mini = got["studio"], got["mini"]
-    # A model the cluster doesn't list (yet) stays with the endpoint's own machine.
+    # Named like a model: that model. Neither named nor bound: the first one listed.
     assert [n["name"] for n in studio["nodes"]] == ["flint", "new"]
     assert studio["nodes"][0]["model_state"] == "ready" and studio["used_gb"] == 36
-    assert [n["name"] for n in mini["nodes"]] == ["thinkingcap"]
+    assert [(n["name"], n["model"]) for n in mini["nodes"]] == [
+        ("thinkingcap", "thinkingcap"),
+        ("bound", "thinkingcap"),
+    ]
     assert mini["reserved"] == "ai-bench (speed run)" and mini["budget_gb"] == 32
     assert got["box.lan"]["ai_swap"] is False and [n["name"] for n in got["box.lan"]["nodes"]] == [
         "plain"
