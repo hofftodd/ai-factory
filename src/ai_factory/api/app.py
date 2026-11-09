@@ -701,8 +701,8 @@ async def list_machines() -> list[dict[str, Any]]:
         state = ""
         if v is not None and model in v.ids:
             where, name = v.ids[model]
-            m = v.machines.get(where)
-            state = m.models[name].state if m and name in m.models else ""
+            host = v.machines.get(where)
+            state = host.models[name].state if host and name in host.models else ""
         elif v is not None and v.machines:
             where = next(iter(v.machines))  # the endpoint's own machine
         else:
