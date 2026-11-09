@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from ai_factory.core.contextpack import budget_tokens
 from ai_factory.core.models import Project, Task
 from ai_factory.executors import EXECUTORS, ExecutorContext
@@ -88,3 +90,32 @@ def test_budget_subtracts_executor_overhead():
     assert budget_tokens(p, 32000, "opencode") == (32000 - 7500) // 2
     assert budget_tokens(p, 32000, "pi") > budget_tokens(p, 32000, "opencode")
     assert set(EXECUTORS) == {"pi", "opencode", "aider", "shell"}
+
+
+@pytest.mark.parametrize(
+    "window,expected",
+    [(None, 8192), (16384, 4096), (32768, 8192), (131072, 32768), (1_000_000, 32768)],
+)
+def test_pi_output_budget_gives_thinking_models_room(window, expected):
+    # 8k was too little for a thinking model on a 128k window: it reasoned through the
+    # whole budget, was cut off, and pi ended the session with nothing written.
+    from ai_factory.executors.pi import auto_max_output, models_config
+
+    assert auto_max_output(window) == expected
+    entry = models_config("http://gw/v1", "m", ExecutorContext(context_window=window))
+    assert entry["providers"]["ai-factory"]["models"][0]["maxTokens"] == expected
+
+
+def test_a_node_can_set_its_own_output_budget():
+    from ai_factory.core.models import Node
+    from ai_factory.executors.pi import models_config
+    from ai_factory.orchestrator.runner import executor_context
+
+    auto = executor_context(Node(name="n", base_url="x", context_window=131072))
+    assert auto.max_output_tokens is None
+    small = executor_context(
+        Node(name="n", base_url="x", context_window=131072, max_output_tokens=4096)
+    )
+    cfg = models_config("http://gw/v1", "m", small)
+    assert cfg["providers"]["ai-factory"]["models"][0]["maxTokens"] == 4096
+    assert executor_context(None).context_window is None

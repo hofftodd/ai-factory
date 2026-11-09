@@ -167,6 +167,9 @@ class Node(SQLModel, table=True):
     base_url: str
     # Usable context window in tokens; sizes context packs.
     context_window: int = 32768
+    # Output tokens per reply for coding agents on this node; 0 = automatic (a quarter
+    # of the context window, 8k-32k: thinking models need room to reason and answer).
+    max_output_tokens: int = 0
     api_key: str = ""
     capacity: int = 1
     models: list[str] = Field(default_factory=list, sa_column=Column(JSON))
