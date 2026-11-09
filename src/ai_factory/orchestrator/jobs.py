@@ -46,6 +46,7 @@ from ai_factory.planner import (
     chat_system_prompt,
     decompose_system_prompt,
     doc_path,
+    history_text,
     parse_chat,
     parse_tasks,
     render_tasks_md,
@@ -53,6 +54,8 @@ from ai_factory.planner import (
     split_system_prompt,
     standard_tasks,
     topo_order,
+    unsaved_retry,
+    unsaved_writes,
 )
 
 log = logging.getLogger("ai-factory.jobs")
@@ -345,7 +348,9 @@ class JobRunner:
                 .where(SpecMessage.project_id == self.project_id)
                 .order_by(col(SpecMessage.id))
             ).all()
-        messages = _alternate([{"role": m.role, "content": m.content} for m in history])
+        messages = _alternate(
+            [{"role": m.role, "content": history_text(m.role, m.content)} for m in history]
+        )
         budget = node.context_window // 2 - estimate_tokens(system)
         messages = _fit_history(messages, max(budget, 2000))
         if not messages or messages[-1]["role"] != "user":
@@ -354,6 +359,30 @@ class JobRunner:
         # Only the Project Planning Agent may research on the web (core/roles.py).
         text = await self._call(node, model, system, messages, research=True, repo=True)
         out = parse_chat(project, text)
+        if unsaved_writes(text, out):
+            # It typed "[wrote ...]" instead of writing blocks, or left a block open: say
+            # so and ask once more, keeping whatever the first reply did save.
+            emit(
+                self.project_id,
+                None,
+                "system",
+                "the planner's reply did not save "
+                + ", ".join(unsaved_writes(text, out))
+                + "; asking again",
+                job_id=self.job_id,
+            )
+            retry = [
+                *messages,
+                {"role": "assistant", "content": text},
+                {"role": "user", "content": unsaved_retry(text, out)},
+            ]
+            earlier = out
+            text = await self._call(node, model, system, retry, research=True, repo=True)
+            out = parse_chat(project, text)
+            out.files = {**earlier.files, **out.files}
+            out.rejected = [*earlier.rejected, *out.rejected]
+            out.message = (earlier.message + "\n\n" + out.message).strip()
+        unsaved = unsaved_writes(text, out)
         if not finish_job(self.job_id, (JobState.RUNNING,), JobState.DONE):
             return  # stopped while we were finishing: apply nothing
         if out.files:
@@ -364,6 +393,11 @@ class JobRunner:
         for what in out.rejected:
             roles.denied(self.project_id, None, roles.PROJECT_PLANNER, f"write {what}")
         content = out.message or "(updated files)"
+        if unsaved:
+            content += (
+                "\n\n(ai-factory: nothing was saved for " + ", ".join(unsaved) + ": the reply "
+                "had no complete file block for it.)"
+            )
         if out.rejected:
             content += (
                 "\n\n(ai-factory refused: " + ", ".join(out.rejected) + ". The planner writes only "
