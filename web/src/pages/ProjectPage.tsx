@@ -337,7 +337,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
           <input className="mono" value={f.test_paths} onChange={(e) => set("test_paths", e.target.value)} />
         </Field>
       </div>
-      <Field label="How tests run here" hint="Optional. For a project whose tests already run a certain way, e.g. “make test; CI runs pytest -n auto”. The Environment Agent installs what it needs and the Tester makes tests/run.sh wrap it.">
+      <Field label="How tests run here" hint="Optional, for an existing codebase whose tests already run a certain way, e.g. “make test; CI runs pytest -n auto”. Leave it empty for a new project: the plan decides. The Environment Agent installs what it needs and the Tester makes tests/run.sh wrap it.">
         <textarea rows={2} maxLength={2000} value={f.test_note} placeholder="e.g. make test (pytest); CI runs pytest -n auto" onChange={(e) => set("test_note", e.target.value)} />
       </Field>
       <h3>Spend</h3>

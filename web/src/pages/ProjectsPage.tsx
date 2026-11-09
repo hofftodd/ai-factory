@@ -68,7 +68,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
     planner_node_id: "",
     planner_model: "",
     push_after_merge: false,
-    test_note: "",
     skip_spec: false,
     repo_mode: "existing" as "existing" | "new",
     new_owner: "",
@@ -113,7 +112,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
             milestone_branch: form.milestone_branch,
             executor_kind: form.executor_kind,
             push_after_merge: form.push_after_merge,
-            test_note: form.test_note.trim(),
             skip_spec: form.skip_spec,
             role_bindings: {
               ...(form.node_id
@@ -226,9 +224,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
           <input type="checkbox" checked={form.skip_spec} onChange={(e) => set("skip_spec", e.target.checked)} />
         </Field>
       </div>
-      <Field label="How tests run here" hint="Optional. For a project whose tests already run a certain way, e.g. “make test; CI runs pytest -n auto”. The Environment Agent installs what it needs and the Tester makes tests/run.sh wrap it.">
-        <textarea rows={2} maxLength={2000} value={form.test_note} placeholder="e.g. make test (pytest); CI runs pytest -n auto" onChange={(e) => set("test_note", e.target.value)} />
-      </Field>
       <ErrorNote error={error} />
       <button className="btn primary" disabled={!!busy || (creating && (!gh?.configured || !owner))}>
         {busy || (creating ? "Create repository and add project" : "Add project")}
