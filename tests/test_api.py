@@ -87,6 +87,14 @@ def test_task_requires_validation_and_valid_deps(client, origin):
     assert t2["deps"] == [t["id"]]
 
 
+def test_node_output_budget_is_stored(client):
+    n = client.post("/api/nodes", json={"name": "a", "base_url": "http://x/v1"}).json()
+    assert n["max_output_tokens"] == 0  # automatic
+    r = client.patch(f"/api/nodes/{n['id']}", json={"max_output_tokens": 16384})
+    assert r.json()["max_output_tokens"] == 16384
+    assert client.patch(f"/api/nodes/{n['id']}", json={"max_output_tokens": -1}).status_code == 422
+
+
 def test_nodes_hide_api_key(client):
     r = client.post(
         "/api/nodes",

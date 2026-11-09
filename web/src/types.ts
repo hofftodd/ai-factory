@@ -121,6 +121,7 @@ export interface Node {
   name: string;
   provider: "openai" | "anthropic";
   context_window: number;
+  max_output_tokens: number;
   base_url: string;
   has_api_key: boolean;
   capacity: number;

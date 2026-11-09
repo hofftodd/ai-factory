@@ -308,6 +308,9 @@ Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
   for llama.cpp, or `http://127.0.0.1:1234/v1` for a server on the same
   machine (ai-factory's gateway connects to it, not the container). Set the
   context window the model really has: task sizes are computed from it.
+  Coding agents get a quarter of it per reply (up to 32k tokens), which a
+  thinking model needs to reason and still answer; set **Max output tokens**
+  on the node to change that.
 - Claude can be added with provider "Anthropic", base URL
   `https://api.anthropic.com` and your API key. Claude can fill any role: the
   planners call it directly (with Claude's web search for research), and coding agents (OpenCode) reach it through

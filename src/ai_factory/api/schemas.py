@@ -99,6 +99,7 @@ class NodeCreate(BaseModel):
     provider: Literal["openai", "anthropic"] = "openai"
     base_url: str = Field(min_length=1)
     context_window: int = Field(default=32768, ge=1024, le=10_000_000)
+    max_output_tokens: int = Field(default=0, ge=0, le=1_000_000)
     api_key: str = ""
     capacity: int = Field(default=1, ge=1, le=64)
     models: list[str] = Field(default_factory=list)
@@ -110,6 +111,7 @@ class NodeUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None
     context_window: int | None = Field(default=None, ge=1024, le=10_000_000)
+    max_output_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
     api_key: str | None = None
     capacity: int | None = Field(default=None, ge=1, le=64)
     price_in: float | None = Field(default=None, ge=0)

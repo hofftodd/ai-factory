@@ -13,6 +13,7 @@ export default function NodesPage() {
     api_key: "",
     capacity: 1,
     context_window: 32768,
+    max_output_tokens: 0,
     price_in: 0,
     price_out: 0,
   };
@@ -112,6 +113,9 @@ export default function NodesPage() {
           </Field>
           <Field label="Context window (tokens)" hint="What the model can actually use; sizes task context packs">
             <input type="number" min={1024} value={f.context_window} onChange={(e) => setF({ ...f, context_window: Number(e.target.value) })} />
+          </Field>
+          <Field label="Max output tokens" hint="Per coding-agent reply; 0 = a quarter of the context window, up to 32k">
+            <input type="number" min={0} value={f.max_output_tokens} onChange={(e) => setF({ ...f, max_output_tokens: Number(e.target.value) })} />
           </Field>
           <Field label="API key" hint="Optional">
             <input type="password" value={f.api_key} onChange={(e) => setF({ ...f, api_key: e.target.value })} />

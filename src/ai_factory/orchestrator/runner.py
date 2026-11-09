@@ -80,6 +80,16 @@ class WatchdogTrip(StepFailed):
     kind = "watchdog"
 
 
+def executor_context(node: Node | None) -> ExecutorContext:
+    """What a coding agent is told about its model: window and output budget."""
+    if node is None:
+        return ExecutorContext()
+    return ExecutorContext(
+        context_window=node.context_window,
+        max_output_tokens=node.max_output_tokens or None,
+    )
+
+
 def resolve_executor(
     project: Project, task: Task, role: str = roles.BUILDER
 ) -> tuple[str, int | None, str]:
@@ -529,7 +539,7 @@ class TaskRunner:
             self.run_dir / "ctl",
             pack.text,
             provider=node.provider if node else "openai",
-            context=ExecutorContext(context_window=node.context_window if node else None),
+            context=executor_context(node),
         )
         self._emit(
             "system", f"executor {kind} starting" + (f" on {node.name} / {model}" if node else "")
@@ -762,7 +772,7 @@ class TaskRunner:
             pack.text,
             provider=node.provider if node else "openai",
             role=role,
-            context=ExecutorContext(context_window=node.context_window if node else None),
+            context=executor_context(node),
         )
         who = roles.ROLES[role].name
         self._emit("system", f"{who} starting" + (f" on {node.name} / {model}" if node else ""))

@@ -30,6 +30,11 @@ from ai_factory.executors.base import ExecutorContext, ExecutorInvocation
 
 PROVIDER = "ai-factory"
 DEFAULT_MAX_OUTPUT = 8192
+# Automatic output budget: a quarter of the window, at most this (8k on a 32k window,
+# as before; 32k on a 128k one). A thinking model's reasoning and answer share it: at
+# 8k, ThinkingCap could reason through the whole budget, get cut off ("length"), and
+# pi ended the session there with nothing written.
+AUTO_MAX_OUTPUT = 32768
 TOOL_RESULT_LINES = 12
 
 FLAGS = [
@@ -46,11 +51,17 @@ FLAGS = [
 ]  # fmt: skip
 
 
+def auto_max_output(window: int | None) -> int:
+    if not window:
+        return DEFAULT_MAX_OUTPUT
+    return min(AUTO_MAX_OUTPUT, window // 4)
+
+
 def models_config(endpoint: str, model: str, context: ExecutorContext | None) -> dict:
     window = context.context_window if context and context.context_window else None
     max_out = context.max_output_tokens if context and context.max_output_tokens else None
     if max_out is None:
-        max_out = min(DEFAULT_MAX_OUTPUT, window // 4) if window else DEFAULT_MAX_OUTPUT
+        max_out = auto_max_output(window)
     entry: dict[str, Any] = {"id": model, "name": model, "maxTokens": max_out}
     if window:
         entry["contextWindow"] = window
