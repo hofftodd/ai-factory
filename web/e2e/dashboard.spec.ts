@@ -29,13 +29,13 @@ test("task runs to done and shows log + diff", async ({ page, request }) => {
   });
 
   await page.goto("/");
-  await expect(page.getByText("e2e-happy")).toBeVisible();
-  await page.getByText("e2e-happy").click();
+  await expect(page.locator("main").getByText("e2e-happy")).toBeVisible();
+  await page.locator("main").getByText("e2e-happy").click();
   await expect(page.getByRole("heading", { name: /e2e-happy/ })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/project-running.png`, fullPage: true });
 
   await page.goto(`/tasks/${t.id}`);
-  await expect(page.locator(".event-log")).toContainText("step 3", { timeout: 60_000 });
+  await expect(page.locator("main .event-log")).toContainText("step 3", { timeout: 60_000 });
   await expect(page.locator(".badge").first()).toHaveText(/done/i, { timeout: 60_000 });
   await page.getByRole("button", { name: "Diff" }).click();
   await expect(page.locator(".diff")).toContainText('GREETING = "hi"');
@@ -51,14 +51,14 @@ test("big red stop button kills a runaway task", async ({ page, request }) => {
   });
 
   await page.goto(`/tasks/${t.id}`);
-  await expect(page.locator(".event-log")).toContainText("still going", { timeout: 60_000 });
+  await expect(page.locator("main .event-log")).toContainText("still going", { timeout: 60_000 });
   await page.screenshot({ path: `${SHOTS}/task-runaway.png`, fullPage: true });
 
   const started = Date.now();
   await page.getByRole("button", { name: "STOP", exact: true }).click();
   await expect(page.locator("h1 .badge")).toHaveText(/stopped by user/i, { timeout: 10_000 });
   expect(Date.now() - started).toBeLessThan(10_000);
-  await expect(page.locator(".event-log")).toContainText("run killed");
+  await expect(page.locator("main .event-log")).toContainText("run killed");
   await page.getByRole("button", { name: "Diff" }).click();
   await expect(page.locator(".diff")).toContainText("partial work"); // work preserved
   await page.screenshot({ path: `${SHOTS}/task-stopped.png`, fullPage: true });

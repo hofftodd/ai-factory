@@ -1,24 +1,10 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { ErrorNote, Field } from "../components";
 import { usePoll } from "../hooks";
+import { Counts, PHASE_LABEL, ProgressBar } from "../projectBits";
 import type { GitHubTokenStatus, Node, Project, SystemInfo } from "../types";
-
-const PHASE_LABEL: Record<Project["phase"], string> = {
-  specify: "specifying",
-  decomposing: "planning",
-  plan_review: "plan review",
-  environment: "preparing environment",
-  execute: "executing",
-  done: "done",
-};
-
-function planned(p: Project) {
-  const c = p.task_counts ?? {};
-  const total = Object.entries(c).reduce((n, [k, v]) => (k === "discarded" || k === "split" ? n : n + (v ?? 0)), 0);
-  return { done: c.done ?? 0, total };
-}
 
 function Portfolio({ projects, nodes }: { projects: Project[]; nodes: Node[] }) {
   const running = projects.filter((p) => p.active_task).length;
@@ -51,38 +37,6 @@ function Portfolio({ projects, nodes }: { projects: Project[]; nodes: Node[] }) 
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function Counts({ p }: { p: Project }) {
-  const c = p.task_counts ?? {};
-  const active = (c.running ?? 0) + (c.validating ?? 0);
-  return (
-    <div className="counts">
-      <span>{c.done ?? 0} done</span>
-      <span className={active ? "hot" : ""}>{active} running</span>
-      <span>{c.queued ?? 0} queued</span>
-      {(c.failed ?? 0) > 0 && <span className="warn">{c.failed} failed</span>}
-      {(c.stopped_by_user ?? 0) > 0 && <span className="warn">{c.stopped_by_user} stopped</span>}
-      {(c.blocked ?? 0) > 0 && <span className="warn">{c.blocked} blocked</span>}
-    </div>
-  );
-}
-
-function ProgressBar({ p }: { p: Project }) {
-  const { done, total } = planned(p);
-  if (!total) return null;
-  return (
-    <div title={`${done} of ${total} tasks done`}>
-      <div className="progress">
-        <div className="progress-fill" style={{ width: `${(done / total) * 100}%` }} />
-      </div>
-      <div className="small muted">
-        {done} of {total} tasks done
-        {p.coverage != null && ` · ${Math.round(p.coverage)}% test coverage`}
-        {p.spend_usd > 0 && ` · $${p.spend_usd.toFixed(2)} spent`}
-      </div>
     </div>
   );
 }
@@ -285,7 +239,9 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
 export default function ProjectsPage() {
   const { data: projects, error } = usePoll<Project[]>("/api/projects", 3000);
   const { data: nodes } = usePoll<Node[]>("/api/nodes", 5000);
-  const [adding, setAdding] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const adding = params.get("new") === "1"; // the sidebar's "+ New" links here
+  const setAdding = (f: (a: boolean) => boolean) => setParams(f(adding) ? { new: "1" } : {});
   const navigate = useNavigate();
 
   return (
