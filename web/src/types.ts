@@ -307,3 +307,13 @@ export interface PlanRevision {
   state: "applied" | "pending" | "rejected" | "empty";
   created_at: number;
 }
+
+/** A computer behind the nodes (GET /api/machines): an ai-swap machine, or a plain endpoint's host. */
+export interface Machine {
+  name: string;
+  ai_swap: boolean;
+  budget_gb: number;
+  used_gb: number;
+  reserved: string;
+  nodes: (Node & { model_state: string })[];
+}

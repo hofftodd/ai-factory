@@ -5,7 +5,7 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { EventLog } from "./components";
 import { useEventStream } from "./hooks";
 import { Counts, PHASE_LABEL, ProgressBar, planned } from "./projectBits";
-import type { Node, Project, SystemInfo } from "./types";
+import type { Machine, Project, SystemInfo } from "./types";
 
 const STALE_S = 10;
 
@@ -59,13 +59,13 @@ function Health({ sys }: { sys: SystemInfo }) {
 export function Sidebar({
   sys,
   projects,
-  nodes,
+  machines,
   selected,
   onNavigate,
 }: {
   sys: SystemInfo | null;
   projects: Project[] | null;
-  nodes: Node[] | null;
+  machines: Machine[] | null;
   selected: number | null;
   onNavigate: () => void;
 }) {
@@ -141,27 +141,50 @@ export function Sidebar({
       </nav>
 
       <div className="side-title">
-        Nodes
+        Machines
         <NavLink to="/nodes" className="side-link" onClick={onNavigate}>
-          Manage
+          Nodes
         </NavLink>
       </div>
-      <div className="side-list nodes" aria-label="Nodes">
-        {nodes?.length === 0 && <div className="side-empty">No nodes yet.</div>}
-        {nodes?.map((n) => {
-          const load = n.capacity ? Math.min(1, n.active / n.capacity) : 0;
+      <div className="side-list machines" aria-label="Machines">
+        {machines?.length === 0 && <div className="side-empty">No nodes yet.</div>}
+        {machines?.map((m) => {
+          const mem = m.budget_gb ? Math.min(1, m.used_gb / m.budget_gb) : 0;
           return (
-            <Link key={n.id} to="/nodes" className="side-row node" onClick={onNavigate} title={n.error || n.base_url}>
-              <span className={`sdot ${n.healthy === false ? "failed" : n.healthy ? (n.active ? "busy" : "ready") : "idle"}`} aria-hidden="true" />
-              <span className="side-name">{n.name}</span>
-              <span className="side-meta">
-                {n.active}/{n.capacity}
-                {n.waiting ? ` +${n.waiting}` : ""}
-              </span>
-              <span className="side-bar" aria-hidden="true">
-                <i style={{ width: `${load * 100}%` }} />
-              </span>
-            </Link>
+            <div key={m.name} className="machine">
+              <Link to="/nodes" className="side-row machine-head" onClick={onNavigate} title={m.reserved ? `reserved by ${m.reserved}` : m.name}>
+                <svg className="srv" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2" y="2.5" width="12" height="4.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                  <rect x="2" y="9" width="12" height="4.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                  <circle cx="4.8" cy="4.75" r=".9" fill="currentColor" />
+                  <circle cx="4.8" cy="11.25" r=".9" fill="currentColor" />
+                </svg>
+                <span className="side-name">{m.name}</span>
+                <span className="side-meta">
+                  {m.reserved ? <span className="pill warn">reserved</span> : m.ai_swap && m.budget_gb ? `${m.used_gb.toFixed(0)} / ${m.budget_gb.toFixed(0)} GB` : ""}
+                </span>
+                {m.ai_swap && m.budget_gb > 0 && (
+                  <span className="side-bar" aria-hidden="true">
+                    <i style={{ width: `${mem * 100}%` }} />
+                  </span>
+                )}
+              </Link>
+              {m.nodes.map((n) => {
+                const dot =
+                  n.healthy === false ? "failed" : n.model_state === "ready" ? (n.active ? "busy" : "ready") : n.model_state === "starting" ? "busy" : "idle";
+                const word = n.healthy === false ? "unreachable" : n.model_state === "ready" ? "loaded" : n.model_state === "starting" ? "loading" : m.ai_swap ? "not loaded" : "";
+                return (
+                  <Link key={n.id} to="/nodes" className="side-row model" onClick={onNavigate} title={`${n.name}${n.models[0] ? ` (${n.models[0]})` : ""}${word ? `: ${word}` : ""}`}>
+                    <span className={`sdot ${dot}`} aria-hidden="true" />
+                    <span className="side-name">{n.name}</span>
+                    <span className="side-meta">
+                      {n.active}/{n.capacity}
+                      {n.waiting ? ` +${n.waiting}` : ""}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
           );
         })}
       </div>
