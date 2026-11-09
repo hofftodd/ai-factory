@@ -149,6 +149,39 @@ async def test_chat_writes_and_commits_documents(client, origin, llm):
     assert last_user_text(llm.requests[-1]) == "Build a greeter."
 
 
+async def test_planner_reads_files_pushed_after_the_project_was_created(
+    client, origin, llm, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("AI_FACTORY_SEARCH_URL", raising=False)
+    p = spec_project(client, origin, llm)
+    work = tmp_path / "user-clone"
+    git("clone", "-q", str(origin), str(work), cwd=tmp_path)
+    (work / "schema").mkdir()
+    (work / "schema" / "domain.json").write_text('{"Recipe": {"properties": {"ID": {}}}}\n')
+    git("add", "-A", cwd=work)
+    git("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", "schema", cwd=work)
+    git("push", "-q", "origin", "HEAD:main", cwd=work)
+
+    llm.planner_after_tools = True
+    llm.tool_script = [("read_file", {"path": "schema/domain.json"})]
+    await chat(client, Orchestrator(), p["id"], "Model the domain in schema/domain.json.")
+    assert job_states(p["id"]) == [JobState.DONE]
+    first, last = llm.requests[-2], llm.requests[-1]
+    assert "schema/domain.json" in system_text(first)  # merged before the planner read
+    assert "You have no web access" in system_text(first)
+    assert {t["function"]["name"] for t in first["tools"]} == {
+        "list_files",
+        "read_file",
+        "search_repo",
+    }
+    tool = [m for m in last["messages"] if m["role"] == "tool"][0]
+    assert '"Recipe"' in tool["content"]
+    with session() as s:
+        texts = [e.message for e in s.exec(select(Event).where(Event.project_id == p["id"]))]
+    assert "merged 1 new commit from origin/main" in texts
+    assert "read file: schema/domain.json (from line 1)" in texts
+
+
 async def test_second_turn_sees_current_documents(client, origin, llm):
     p = spec_project(client, origin, llm)
     orch = Orchestrator()

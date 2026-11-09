@@ -16,6 +16,56 @@ def test_project_lifecycle(client, origin):
     assert client.get("/api/projects").json() == []
 
 
+def test_delete_project_with_history(client, origin):
+    """A project that has been planned, tested and gated can still be deleted."""
+    from ai_factory.core.models import (
+        Gate,
+        GateKind,
+        JobKind,
+        JobState,
+        PlannerJob,
+        PlanRevision,
+        SpecMessage,
+        TestCase,
+        TestRun,
+    )
+    from ai_factory.db import session
+
+    p = make_project(client, origin)
+    pid = p["id"]
+    with session() as s:
+        job = PlannerJob(project_id=pid, kind=JobKind.CHAT, state=JobState.DONE)
+        run = TestRun(project_id=pid, step="builder")
+        s.add_all([job, run])
+        s.commit()
+        s.add_all(
+            [
+                SpecMessage(project_id=pid, role="user", content="hello", job_id=job.id),
+                Gate(project_id=pid, kind=list(GateKind)[0], title="decide"),
+                PlanRevision(project_id=pid, version=1, trigger="task T1 done"),
+                TestCase(test_run_id=run.id, name="test_x"),
+            ]
+        )
+        s.commit()
+    assert client.delete(f"/api/projects/{pid}").status_code == 204
+    assert client.get("/api/projects").json() == []
+    with session() as s:
+        for table in (SpecMessage, PlannerJob, Gate, PlanRevision, TestRun, TestCase):
+            assert s.exec(select(table)).all() == [], table.__name__
+
+
+def test_delete_project_refuses_while_planning(client, origin):
+    from ai_factory.core.models import JobKind, PlannerJob
+    from ai_factory.db import session
+
+    p = make_project(client, origin)
+    with session() as s:
+        s.add(PlannerJob(project_id=p["id"], kind=JobKind.CHAT))
+        s.commit()
+    r = client.delete(f"/api/projects/{p['id']}")
+    assert r.status_code == 409 and "planning job" in r.json()["detail"]
+
+
 def test_clone_failure_is_reported(client, tmp_path):
     r = client.post("/api/projects", json={"name": "x", "repo_url": str(tmp_path / "nope")})
     assert r.status_code == 400 and "clone failed" in r.json()["detail"]

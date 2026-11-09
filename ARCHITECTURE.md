@@ -69,8 +69,8 @@ flowchart TB
 
 | Agent | May | May not |
 |---|---|---|
-| Project Planning Agent | write the requirements, design and acceptance criteria (markdown); talk with you; research topics on the web | write code, tests or commands; create or change tasks |
-| Task Planning Agent | read the documents; create, split, change and remove tasks, in plain language; propose a change to the documents (you decide) | write documents, code or tests; name files or commands |
+| Project Planning Agent | write the requirements, design and acceptance criteria (markdown); talk with you; read the repository; research topics on the web | write code, tests or commands; create or change tasks |
+| Task Planning Agent | read the documents, and the repository when planning tasks; create, split, change and remove tasks, in plain language; propose a change to the documents (you decide) | write documents, code or tests; name files or commands |
 | Environment Agent | read the documents and the task list; write the toolchain Dockerfile and its check script (`.ai-factory/`) | write code, tests or documents |
 | Tester Agent | write and change files under the project's test paths (`tests/` by default); run commands and tests | change any file outside the test paths, or the toolchain image |
 | Builder Agent | write and change code and docs (`README.md`, `ARCHITECTURE.md`); run commands, including the tests | change any test, or the toolchain image |
@@ -81,10 +81,15 @@ tests that judge it**, and the planners think about *what* to build, never
 
 These rules are enforced, not just asked for:
 
-- **The planners have no tools.** They only send text back. ai-factory reads
-  out of it the actions that role is allowed (document files for the
-  Project Planner, task changes for the Task Planner) and ignores the rest.
-  A task that names files or commands is refused.
+- **The planners can only read.** Their tools are read-only: `list_files`,
+  `read_file` and `search_repo` on ai-factory's clone of the repository
+  (`.git` hidden, nothing outside the clone reachable, large files read in
+  pieces), plus web search and fetch for the Project Planner. Everything
+  else they do is text sent back: ai-factory reads out of it the actions
+  that role is allowed (document files for the Project Planner, task
+  changes for the Task Planner) and ignores the rest. A task that names
+  files or commands is refused. Each prompt says which tools the call
+  really has, so a model without web access doesn't invent searches.
 - **The Tester and Builder get different views of the repository.** In the
   Tester's container the code is mounted read-only and only the test folders
   are writable; in the Builder's it is the other way round.
@@ -406,7 +411,13 @@ The planners are called directly by the orchestrator. The Project
 Planner's web research uses Claude's built-in web search when it runs on
 Claude; on a local model it uses a search server you point ai-factory at
 (`AI_FACTORY_SEARCH_URL`, a SearXNG instance), and ai-factory only fetches public
-pages for it. Coding agents only ever reach their model through the gateway,
+pages for it. Both planners read the repository through ai-factory's own
+read-only tools (`repotools.py`), on Claude and on local models alike; tool
+rounds stop when the model's context window is nearly full, and it is then
+asked to answer with what it has. Before each planning chat, ai-factory
+fetches the repository's default branch and merges anything new into the
+milestone branch (a conflict is backed out and reported), so files pushed
+to GitHub after the project was added reach the planners. Coding agents only ever reach their model through the gateway,
 which speaks both the OpenAI chat format (local servers) and Claude's own
 format.
 
@@ -437,6 +448,7 @@ Each repair is logged in the project's activity feed.
 | Planning jobs (chat, breakdown, split, review) | `src/ai_factory/orchestrator/jobs.py`, `src/ai_factory/planner.py` |
 | Test results and coverage | `src/ai_factory/testresults.py` |
 | Web research for the Project Planner | `src/ai_factory/research.py` |
+| Read-only repository tools for the planners | `src/ai_factory/repotools.py` |
 | Escalation ladder | `src/ai_factory/orchestrator/escalation.py` |
 | Replanning after each task | `src/ai_factory/orchestrator/replan.py` |
 | Acceptance check and pull request | `src/ai_factory/orchestrator/milestone.py` |

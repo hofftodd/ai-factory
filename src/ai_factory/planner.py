@@ -150,6 +150,35 @@ PLAIN_LANGUAGE = (
 )
 
 
+def tools_note(tools: dict[str, bool] | None) -> list[str]:
+    """What the planner can look things up with, stated plainly. A model told nothing
+    tends to invent tool calls in its reply text, so it is also told when it has none."""
+    tools = tools or {}
+    lines: list[str] = []
+    if tools.get("repo"):
+        lines += [
+            "You can read the project's repository with the tools list_files, read_file "
+            "and search_repo (read-only). Read what the plan depends on before deciding: "
+            "existing code, documentation, and any schema, specification or reference "
+            "material the user has added. Files can be large: search first, then read the "
+            "parts you need. You may name a file that already exists in the repository "
+            "when the work depends on it (for example a schema the software must follow); "
+            "never name files that do not exist yet.",
+        ]
+    if tools.get("web"):
+        lines += [
+            "You can search and read the web with your web tools. Use them to research "
+            "topics you don't know well before deciding, and mention what you relied on.",
+        ]
+    else:
+        lines += [
+            "You have no web access. Do not write tool calls or pretend to search: rely on "
+            "what you know and on the repository, say where you are unsure, and ask the "
+            "user for material you need.",
+        ]
+    return lines
+
+
 def chat_stage(docs: dict[str, str]) -> str:
     """ "design" until the three planning documents exist, then "review"."""
     if not all(docs.get(n, "").strip() for n in roles.PLANNING_DOCS):
@@ -170,8 +199,14 @@ _STAGE_GUIDANCE = {
 }
 
 
-def chat_system_prompt(project: Project, docs: dict[str, str], tree: list[str]) -> str:
-    """The Project Planning Agent's instructions and the documents as they are now."""
+def chat_system_prompt(
+    project: Project,
+    docs: dict[str, str],
+    tree: list[str],
+    tools: dict[str, bool] | None = None,
+) -> str:
+    """The Project Planning Agent's instructions and the documents as they are now.
+    `tools` says which tool families the call offers (llm.tools_offered)."""
     paths = {k: doc_path(project, k) for k in roles.PLANNING_DOCS}
     stage = chat_stage(docs)
     parts = [
@@ -190,10 +225,9 @@ def chat_system_prompt(project: Project, docs: dict[str, str], tree: list[str]) 
         "statements, each citing the requirement ids it checks, e.g. "
         "`- AC-1 (FR-1.1) After adding a todo it appears in the list.`",
         "",
-        "Ask clarifying questions when the request is ambiguous. If you have web search "
-        "tools, use them to research topics you don't know well before deciding; mention "
-        "what you relied on. Keep each document short: the work will be broken into small "
-        "tasks.",
+        "Ask clarifying questions when the request is ambiguous. Keep each document short: "
+        "the work will be broken into small tasks.",
+        *tools_note(tools),
         "Think about decisions, not text: do not draft the documents while reasoning. Write "
         "each one once, in your reply.",
         "",
@@ -212,7 +246,12 @@ def chat_system_prompt(project: Project, docs: dict[str, str], tree: list[str]) 
     for key, path in paths.items():
         parts += ["", f"## {path}", docs.get(key, "").strip() or "(empty)"]
     if tree:
-        parts += ["", "## The repository already contains (for context only)", *tree[:100]]
+        heading = (
+            "## The repository already contains (read any of it with read_file)"
+            if (tools or {}).get("repo")
+            else "## The repository already contains (for context only)"
+        )
+        parts += ["", heading, *tree[:100]]
         if len(tree) > 100:
             parts.append(f"... and {len(tree) - 100} more")
     return "\n".join(parts)
@@ -263,7 +302,10 @@ def _docs_section(project: Project, docs: dict[str, str]) -> list[str]:
 
 
 def decompose_system_prompt(
-    project: Project, docs: dict[str, str], done: list[dict[str, Any]] | None = None
+    project: Project,
+    docs: dict[str, str],
+    done: list[dict[str, Any]] | None = None,
+    tools: dict[str, bool] | None = None,
 ) -> str:
     """The Task Planning Agent breaks the approved documents into tasks. `done` are the
     finished tasks of an earlier plan (going back to planning): only the rest is planned."""
@@ -288,6 +330,7 @@ def decompose_system_prompt(
             *TASK_RULES,
             STANDARD_TASKS_NOTE,
             "Together, the tasks must make every acceptance criterion true.",
+            *tools_note(tools),
             "",
             "Output ONLY a JSON array, no prose, like:",
             TASK_EXAMPLE,
@@ -298,7 +341,11 @@ def decompose_system_prompt(
 
 
 def split_system_prompt(
-    project: Project, docs: dict[str, str], task: dict[str, Any], failures: list[str]
+    project: Project,
+    docs: dict[str, str],
+    task: dict[str, Any],
+    failures: list[str],
+    tools: dict[str, bool] | None = None,
 ) -> str:
     """Ask the Task Planning Agent to split one task that keeps failing."""
     return "\n".join(
@@ -310,6 +357,7 @@ def split_system_prompt(
             *TASK_RULES,
             "- deps lists keys of the other new tasks that must finish first.",
             "- Address the failures below: smaller steps, one behaviour at a time.",
+            *tools_note(tools),
             "",
             "Output ONLY a JSON array in the same format as the task below.",
             "",

@@ -94,6 +94,11 @@ class FakeLLM:
         # Stop reasons for successive Messages API replies (default end_turn), e.g.
         # ["pause_turn"] to pause the first one like a long server-side research turn.
         self.anthropic_stops: list[str] = []
+        # Tool calls to make first, in order, each while that tool is offered:
+        # [(name, arguments)], e.g. [("read_file", {"path": "README.md"})].
+        self.tool_script: list[tuple[str, dict[str, Any]]] = []
+        # A planner (not a coding agent) answers with `planner` after its tool calls.
+        self.planner_after_tools = False
         self.disconnected = threading.Event()
         outer = self
 
@@ -371,6 +376,14 @@ class FakeLLM:
         tools = {
             t.get("function", {}).get("name"): t.get("function", {}) for t in req.get("tools") or []
         }
+        if self.tool_script and self.tool_script[0][0] in tools:
+            name, args = self.tool_script.pop(0)
+            call = {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
+            return {"role": "assistant", "content": None, "tool_calls": [call]}, "tool_calls"
         if "web_search" in tools and not any(m.get("role") == "tool" for m in messages):
             # A planner with research tools looks something up first.
             call = {
@@ -383,6 +396,8 @@ class FakeLLM:
             text = self.planner(req) if self.planner else "Fake task"
             return {"role": "assistant", "content": text}, "stop"
         if any(m.get("role") == "tool" for m in messages):
+            if self.planner_after_tools and self.planner:
+                return {"role": "assistant", "content": self.planner(req)}, "stop"
             return {"role": "assistant", "content": "Done."}, "stop"
         if "write" in tools:
             props = (tools["write"].get("parameters") or {}).get("properties") or {}
@@ -400,6 +415,10 @@ class FakeLLM:
 
     def decide_anthropic(self, req: dict[str, Any]) -> dict[str, Any] | None:
         """Like `decide`, for the Messages API: write the file once, then finish."""
+        offered = {t.get("name") for t in req.get("tools") or []}
+        if self.tool_script and self.tool_script[0][0] in offered:
+            name, args = self.tool_script.pop(0)
+            return {"id": f"toolu_{uuid.uuid4().hex[:8]}", "name": name, "input": args}
         for m in req.get("messages", []):
             content = m.get("content")
             if isinstance(content, list) and any(
