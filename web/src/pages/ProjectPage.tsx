@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { control, del, patch, post } from "../api";
 import { ActionButton, ErrorNote, EventLog, Field, StateBadge, StopButton, lines } from "../components";
 import { useEventStream, usePoll } from "../hooks";
-import type { CoveragePoint, FEvent, Node, PlannerJob, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
+import { ModelPicker } from "../ModelPicker";
+import type { CoveragePoint, FEvent, PlannerJob, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
 import CoverageChart from "../CoverageChart";
 import ProgressChart, { type ProgressPoint } from "../ProgressChart";
 import { CaseList, RunSummary } from "./TaskPage";
@@ -137,59 +138,44 @@ const REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
 
 function RoleFields({
   label,
-  nodes,
   binding,
   onChange,
-  listId,
   hint,
   withEffort,
 }: {
   label: string;
-  nodes: Node[] | null;
   binding: BindingForm;
   onChange: (b: BindingForm) => void;
-  listId: string;
   hint?: string;
   withEffort?: boolean;
 }) {
-  const node = nodes?.find((n) => String(n.id) === binding.node_id);
   return (
-    <>
-      <Field label={`${label} node`} hint={hint}>
-        <select value={binding.node_id} onChange={(e) => onChange({ ...binding, node_id: e.target.value })}>
-          <option value="">— none —</option>
-          {nodes?.map((n) => (
-            <option key={n.id} value={n.id}>
-              {n.name} {n.provider === "anthropic" ? "(Claude)" : ""}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <Field
-        label={withEffort ? `${label} model · reasoning` : `${label} model`}
-        hint={withEffort ? "Reasoning: passed to the model's chat template; default leaves the model's own" : undefined}
-      >
-        <div className="inline">
-          <input list={listId} value={binding.model} onChange={(e) => onChange({ ...binding, model: e.target.value })} />
-          {withEffort && (
-            <select
-              aria-label={`${label} reasoning effort`}
-              value={binding.reasoning_effort}
-              onChange={(e) => onChange({ ...binding, reasoning_effort: e.target.value })}
-            >
-              <option value="">default</option>
-              {REASONING_EFFORTS.map((x) => <option key={x}>{x}</option>)}
-            </select>
-          )}
-        </div>
-        <datalist id={listId}>{node?.models.map((m) => <option key={m} value={m} />)}</datalist>
-      </Field>
-    </>
+    <Field
+      label={withEffort ? `${label} · reasoning` : label}
+      hint={hint ?? (withEffort ? "Reasoning: passed to the model's chat template; default leaves the model's own" : undefined)}
+    >
+      <div className="inline">
+        <ModelPicker
+          ariaLabel={`${label} model`}
+          value={binding}
+          onChange={(c) => onChange({ ...binding, ...c })}
+        />
+        {withEffort && (
+          <select
+            aria-label={`${label} reasoning effort`}
+            value={binding.reasoning_effort}
+            onChange={(e) => onChange({ ...binding, reasoning_effort: e.target.value })}
+          >
+            <option value="">default</option>
+            {REASONING_EFFORTS.map((x) => <option key={x}>{x}</option>)}
+          </select>
+        )}
+      </div>
+    </Field>
   );
 }
 
 function Settings({ project, onSaved }: { project: Project; onSaved: () => void }) {
-  const { data: nodes } = usePoll<Node[]>("/api/nodes", 10000);
   // Older projects bound "planner" and "executor": each agent falls back to those.
   const b = (...keys: string[]) => {
     const x = keys.map((k) => project.role_bindings[k]).find((v) => v?.node_id) ?? { node_id: null, model: "", reasoning_effort: "" };
@@ -294,12 +280,12 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
       <h3>Agents</h3>
       <p className="small muted">Which model each agent uses. Each agent can only do what its role allows.</p>
       <div className="grid2">
-        <RoleFields label="Project Planner" nodes={nodes} binding={projectPlanner} onChange={setProjectPlanner} listId="pp-models" />
-        <RoleFields label="Task Planner" nodes={nodes} binding={taskPlanner} onChange={setTaskPlanner} listId="tp-models" />
-        <RoleFields label="Environment" nodes={nodes} binding={envAgent} onChange={setEnvAgent} listId="env-models" hint="Empty: uses the Task Planner's model" />
-        <RoleFields label="Tester" nodes={nodes} binding={tester} onChange={setTester} listId="tester-models" withEffort />
-        <RoleFields label="Builder" nodes={nodes} binding={builder} onChange={setBuilder} listId="builder-models" withEffort />
-        <RoleFields label="Escalation" nodes={nodes} binding={escalation} onChange={setEscalation} listId="escalation-models" withEffort />
+        <RoleFields label="Project Planner" binding={projectPlanner} onChange={setProjectPlanner} />
+        <RoleFields label="Task Planner" binding={taskPlanner} onChange={setTaskPlanner} />
+        <RoleFields label="Environment" binding={envAgent} onChange={setEnvAgent} hint="Empty: uses the Task Planner's model" />
+        <RoleFields label="Tester" binding={tester} onChange={setTester} withEffort />
+        <RoleFields label="Builder" binding={builder} onChange={setBuilder} withEffort />
+        <RoleFields label="Escalation" binding={escalation} onChange={setEscalation} withEffort />
         <Field label="Coding agent" hint="Runs the Tester and Builder">
           <select value={f.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>
             <option>pi</option>
