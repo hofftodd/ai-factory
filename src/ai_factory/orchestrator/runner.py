@@ -862,9 +862,13 @@ class TaskRunner:
         task_tests = [f for f in task_tests if roles.is_test_path(project, f)]
         changed = await self._agent(roles.BUILDER, project, clone, executor, task_tests)
         report = self.run_dir / "results" / f"{roles.BUILDER}-agent" / CONFLICT_REPORT
-        if report.is_file() and report.read_text(errors="replace").strip():
-            self._tests_conflict(report.read_text(errors="replace").strip())
+        # A conflict report only counts if the tests then fail: a Builder that got the suite
+        # green has, by definition, found no tests that can't both pass (models sometimes
+        # write the file just to say there is no conflict).
+        conflict = report.read_text(errors="replace").strip() if report.is_file() else ""
         self._check_diff_size(project, clone, changed, base=task.tests_commit or gitops.BASE_REF)
+        if task.hold and conflict:
+            self._tests_conflict(conflict, (TaskState.RUNNING,))
         if task.hold:
             transition(self.task_id, (TaskState.RUNNING,), TaskState.PAUSED, "paused after build")
             finish_run(self.run_id, RunState.SUCCEEDED, "paused after build")
@@ -875,6 +879,20 @@ class TaskRunner:
         self.image = await self._toolchain_image(task.project_id, clone)
         # Changed-line coverage covers all the code this task changed, across rounds.
         result = await self._run_suite(project, clone, "builder", task_tests, base=gitops.BASE_REF)
+        green = (
+            result is not None
+            and not result[0].problem
+            and result[1] == 0
+            and not (result[0].failed + result[0].errors)
+        )
+        if conflict and not green:
+            self._tests_conflict(conflict, (TaskState.VALIDATING,))
+        if conflict:
+            self._emit(
+                "system",
+                "the Builder Agent wrote a test-conflict report, but the whole suite passes, "
+                "so there is no conflict; carrying on",
+            )
         if result is None:
             raise StepFailed(
                 f"there is no test runner: {SUITE_RUNNER} is missing", kind="validation"
@@ -1011,7 +1029,7 @@ class TaskRunner:
             return prev.reason
         return ""
 
-    def _tests_conflict(self, report: str) -> None:
+    def _tests_conflict(self, report: str, frm: tuple[TaskState, ...]) -> None:
         """The Builder reports tests that contradict each other: the task goes back to the
         Tester with the report. A second report in a row fails the attempt instead, so the
         two agents can't hand it back and forth."""
@@ -1029,7 +1047,7 @@ class TaskRunner:
         self._set_run(failure_kind="tests_conflict")
         why = "tests contradict each other; back to the Tester"
         finish_run(self.run_id, RunState.SUCCEEDED, why)
-        send_back_to_tester(self.task_id, (TaskState.RUNNING,), report[:4000], source=roles.BUILDER)
+        send_back_to_tester(self.task_id, frm, report[:4000], source=roles.BUILDER)
         raise Stopped("sent back to the Tester")
 
     def _needs_red(self, task: Task) -> bool:
