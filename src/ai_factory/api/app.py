@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
@@ -656,6 +657,58 @@ async def residency_conflicts(body: dict[str, Any]) -> dict[str, list[str]]:
     if not isinstance(bindings, dict):
         raise HTTPException(400, "role_bindings must be an object")
     return {"warnings": await residency.binding_conflicts(bindings)}
+
+
+@router.get("/api/machines")
+async def list_machines() -> list[dict[str, Any]]:
+    """The computers behind the nodes. For an ai-swap endpoint, every machine in its cluster,
+    with its memory and reservation, holding the nodes whose model it serves; any other
+    endpoint (plain llama.cpp, Claude) is a machine of its own, named after its host."""
+    with session() as s:
+        nodes = list(s.exec(select(Node).order_by(col(Node.id))))
+    load = await run_in_threadpool(_node_load)
+    endpoints: dict[str, Node] = {}
+    for n in nodes:
+        endpoints.setdefault(residency.root(n), n)
+    async with httpx.AsyncClient(timeout=3) as client:
+        found = await asyncio.gather(*(residency.fetch(n, client) for n in endpoints.values()))
+    views = dict(zip(endpoints, found, strict=True))
+
+    machines: dict[str, dict[str, Any]] = {}
+
+    def machine(name: str) -> dict[str, Any]:
+        return machines.setdefault(
+            name,
+            {
+                "name": name,
+                "ai_swap": False,
+                "budget_gb": 0.0,
+                "used_gb": 0.0,
+                "reserved": "",
+                "nodes": [],
+            },
+        )
+
+    for v in views.values():
+        for m in (v.machines if v else {}).values():
+            used = sum(x.memory_gb for x in m.models.values() if x.state in residency.ACTIVE)
+            machine(m.name).update(
+                ai_swap=True, budget_gb=m.budget_gb, used_gb=round(used, 1), reserved=m.reserved
+            )
+    for n in nodes:
+        v = views.get(residency.root(n))
+        model = n.models[0] if n.models else ""
+        state = ""
+        if v is not None and model in v.ids:
+            where, name = v.ids[model]
+            host = v.machines.get(where)
+            state = host.models[name].state if host and name in host.models else ""
+        elif v is not None and v.machines:
+            where = next(iter(v.machines))  # the endpoint's own machine
+        else:
+            where = urlsplit(n.base_url).hostname or n.base_url
+        machine(where)["nodes"].append({**_node_out(n, load), "model_state": state})
+    return list(machines.values())
 
 
 @router.get("/api/nodes")

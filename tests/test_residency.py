@@ -279,3 +279,46 @@ def test_conflicting_bindings_are_reported(client, fake_fetch):
         },
     )
     assert ok.json()["warnings"] == []
+
+
+def test_machines_group_nodes_by_the_computer_serving_their_model(client, fake_fetch):
+    """The sidebar's Machines: ai-swap's computers, each with the nodes whose model it serves."""
+    status = {
+        "node": {
+            "name": "studio",
+            "memory_budget_gb": 220,
+            "models": [{"name": "flint", "state": "ready", "memory_gb": 36}],
+        },
+        "peers": [
+            {
+                "online": True,
+                "node": {
+                    "name": "mini",
+                    "memory_budget_gb": 32,
+                    "lock": {"owner": "ai-bench", "reason": "speed run"},
+                    "models": [{"name": "thinkingcap", "state": "stopped", "memory_gb": 20}],
+                },
+            }
+        ],
+    }
+    listed = {"data": [{"id": "flint", "node": "studio"}, {"id": "thinkingcap", "node": "mini"}]}
+    residency._views[SWAP] = residency._parse(status, listed)
+    for name, model in (("flint", "flint"), ("thinkingcap", "thinkingcap"), ("new", "gone")):
+        r = client.post(
+            "/api/nodes", json={"name": name, "base_url": SWAP + "/v1", "models": [model]}
+        )
+        assert r.status_code == 201, r.text
+    r = client.post("/api/nodes", json={"name": "plain", "base_url": "http://box.lan:8000/v1"})
+    assert r.status_code == 201, r.text
+
+    got = {m["name"]: m for m in client.get("/api/machines").json()}
+    assert set(got) == {"studio", "mini", "box.lan"}
+    studio, mini = got["studio"], got["mini"]
+    # A model the cluster doesn't list (yet) stays with the endpoint's own machine.
+    assert [n["name"] for n in studio["nodes"]] == ["flint", "new"]
+    assert studio["nodes"][0]["model_state"] == "ready" and studio["used_gb"] == 36
+    assert [n["name"] for n in mini["nodes"]] == ["thinkingcap"]
+    assert mini["reserved"] == "ai-bench (speed run)" and mini["budget_gb"] == 32
+    assert got["box.lan"]["ai_swap"] is False and [n["name"] for n in got["box.lan"]["nodes"]] == [
+        "plain"
+    ]

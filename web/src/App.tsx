@@ -11,7 +11,7 @@ import ProjectPage from "./pages/ProjectPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import SettingsPage from "./pages/SettingsPage";
 import TaskPage from "./pages/TaskPage";
-import type { Node, Project, SystemInfo, Task } from "./types";
+import type { Machine, Project, SystemInfo, Task } from "./types";
 
 function TokenPrompt({ onSaved }: { onSaved: () => void }) {
   const [value, setValue] = useState(getToken());
@@ -48,7 +48,7 @@ export default function App() {
   const { data: sys, error, reload } = usePoll<SystemInfo>("/api/system", 2000);
   const needsToken = !!error && error.includes("token");
   const { data: projects } = usePoll<Project[]>(needsToken ? null : "/api/projects", 3000);
-  const { data: nodes } = usePoll<Node[]>(needsToken ? null : "/api/nodes", 5000);
+  const { data: machines } = usePoll<Machine[]>(needsToken ? null : "/api/machines", 5000);
   const selectedId = useSelectedProject();
   const selected = projects?.find((p) => p.id === selectedId) ?? null;
 
@@ -74,7 +74,7 @@ export default function App() {
       <Sidebar
         sys={sys}
         projects={needsToken ? [] : projects}
-        nodes={nodes}
+        machines={machines}
         selected={selectedId}
         onNavigate={() => setSideOpen(false)}
       />
