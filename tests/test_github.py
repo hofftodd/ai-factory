@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from foreman import github
+from ai_factory import github
 
 
 @pytest.fixture

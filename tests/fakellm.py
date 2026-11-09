@@ -477,8 +477,8 @@ DEMO_TASKS = [
 
 
 DEMO_ENVIRONMENT = (
-    "<<<FILE .foreman/Dockerfile\nFROM foreman/executor-base\n>>>\n"
-    "<<<FILE .foreman/check.sh\n#!/bin/sh\nset -e\ncommand -v sh\ncommand -v git\n>>>\n"
+    "<<<FILE .ai-factory/Dockerfile\nFROM ai-factory/executor-base\n>>>\n"
+    "<<<FILE .ai-factory/check.sh\n#!/bin/sh\nset -e\ncommand -v sh\ncommand -v git\n>>>\n"
     "The base image already has everything this greeter needs."
 )
 

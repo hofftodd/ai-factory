@@ -7,10 +7,10 @@ import json
 import httpx
 import pytest
 
-from foreman.core.models import Node, Project, RunState, Task, TaskRun, TaskState
-from foreman.core.state import transition
-from foreman.db import session
-from foreman.gateway import Gateway, new_token, serve
+from ai_factory.core.models import Node, Project, RunState, Task, TaskRun, TaskState
+from ai_factory.core.state import transition
+from ai_factory.db import session
+from ai_factory.gateway import Gateway, new_token, serve
 from tests.fakellm import FakeLLM
 
 
@@ -117,7 +117,7 @@ async def test_each_agent_role_asks_for_its_reasoning_effort(gw, llm):
 
 
 def test_an_escalated_task_uses_the_escalation_models_effort():
-    from foreman.core import roles
+    from ai_factory.core import roles
 
     p = Project(
         name="p",
@@ -238,7 +238,7 @@ async def test_priced_node_charges_and_stops_at_cap(gw, llm):
 
 
 def test_budget_failure_requeues_without_counting():
-    from foreman.orchestrator.escalation import after_failure
+    from ai_factory.orchestrator.escalation import after_failure
 
     with session() as s:
         p = Project(name="p", repo_url="x")

@@ -4,10 +4,10 @@ import { ActionButton, ErrorNote, Field } from "../components";
 import { usePoll } from "../hooks";
 import type { GitHubTokenStatus } from "../types";
 
-// Fine-grained tokens can be limited to the repositories Foreman works on; the classic
+// Fine-grained tokens can be limited to the repositories ai-factory works on; the classic
 // link pre-fills the one scope it needs.
 const NEW_FINE_GRAINED = "https://github.com/settings/personal-access-tokens/new";
-const NEW_CLASSIC = "https://github.com/settings/tokens/new?scopes=repo&description=Foreman";
+const NEW_CLASSIC = "https://github.com/settings/tokens/new?scopes=repo&description=ai-factory";
 
 export default function SettingsPage() {
   const { data: gh, error, reload } = usePoll<GitHubTokenStatus>("/api/settings/github", 10000);
@@ -54,7 +54,7 @@ export default function SettingsPage() {
           with the <code>repo</code> scope.
         </p>
         <p className="small muted">
-          To create repositories for new projects from Foreman, a fine-grained token also needs{" "}
+          To create repositories for new projects from ai-factory, a fine-grained token also needs{" "}
           <b>Administration</b> (read and write) and access to <b>all repositories</b>; a classic token's{" "}
           <code>repo</code> scope already covers it.
         </p>
@@ -64,7 +64,7 @@ export default function SettingsPage() {
           ) : gh.configured ? (
             <>
               Token ending in <code>{gh.hint}</code>, set{" "}
-              {gh.source === "dashboard" ? "here" : <>by <code>FOREMAN_GITHUB_TOKEN</code></>}
+              {gh.source === "dashboard" ? "here" : <>by <code>AI_FACTORY_GITHUB_TOKEN</code></>}
             </>
           ) : (
             <span className="muted">No token configured</span>
@@ -77,7 +77,7 @@ export default function SettingsPage() {
         )}
         <Field
           label={gh?.configured ? "Replace token" : "Token"}
-          hint={gh?.source === "environment" ? "A token saved here takes precedence over FOREMAN_GITHUB_TOKEN" : undefined}
+          hint={gh?.source === "environment" ? "A token saved here takes precedence over AI_FACTORY_GITHUB_TOKEN" : undefined}
         >
           <input
             type="password"

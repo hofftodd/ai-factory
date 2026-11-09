@@ -26,7 +26,7 @@ export default function NodesPage() {
         <h1>Inference nodes</h1>
       </div>
       <p className="muted">
-        Local OpenAI-compatible servers (llama.cpp, LM Studio, Ollama, MLX, vLLM…) or the Claude API. Foreman connects
+        Local OpenAI-compatible servers (llama.cpp, LM Studio, Ollama, MLX, vLLM…) or the Claude API. ai-factory connects
         to them from this machine; agents reach them only through its gateway, which holds the API keys.
       </p>
       <ErrorNote error={error} />

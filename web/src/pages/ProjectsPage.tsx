@@ -106,7 +106,7 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
   const [form, setForm] = useState({
     name: "",
     repo_url: "",
-    milestone_branch: "foreman/m1",
+    milestone_branch: "ai-factory/m1",
     executor_kind: "pi",
     node_id: "",
     model: "",

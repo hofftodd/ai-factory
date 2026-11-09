@@ -11,26 +11,26 @@ from typing import Any
 import pytest
 from sqlmodel import col, select
 
-from foreman import gitops, images
-from foreman.core import roles
-from foreman.core.models import Event, JobState, Project, ProjectPhase, Task, TaskState
-from foreman.db import session
-from foreman.orchestrator import environment
-from foreman.orchestrator.environment import EnvError, parse_files
-from foreman.orchestrator.main import Orchestrator
+from ai_factory import gitops, images
+from ai_factory.core import roles
+from ai_factory.core.models import Event, JobState, Project, ProjectPhase, Task, TaskState
+from ai_factory.db import session
+from ai_factory.orchestrator import environment
+from ai_factory.orchestrator.environment import EnvError, parse_files
+from ai_factory.orchestrator.main import Orchestrator
 from tests.fakellm import FakeLLM, last_user_text, system_text
 from tests.helpers import drive, project
 from tests.test_spec_flow import approved, job_states, scripted, spec_project
 
 ENV_ANSWER = """Here is the toolchain.
 
-<<<FILE .foreman/Dockerfile
-FROM foreman/executor-base
+<<<FILE .ai-factory/Dockerfile
+FROM ai-factory/executor-base
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pytest
 USER agent
 >>>
-<<<FILE .foreman/check.sh
+<<<FILE .ai-factory/check.sh
 python3 --version
 pytest --version
 >>>
@@ -47,8 +47,8 @@ class Docker:
     async def ensure_image(self, project_id: int, workspace: Path, **_: Any) -> str:
         self.builds.append((workspace / images.DOCKERFILE).read_text())
         if self.build_error:
-            raise images.ImageBuildError("building .foreman/Dockerfile failed", self.build_error)
-        return f"foreman/project-test-{project_id}:abc"
+            raise images.ImageBuildError("building .ai-factory/Dockerfile failed", self.build_error)
+        return f"ai-factory/project-test-{project_id}:abc"
 
     async def run_check(self, tag: str, context: Path, on_handle: Any) -> tuple[int, str]:
         return 0, (context / "check.sh").read_text()
@@ -98,8 +98,10 @@ async def test_environment_is_prepared_before_any_task_runs(client, origin, llm,
     await drive(orch, lambda: project(pid).phase == ProjectPhase.EXECUTE)
     assert project(pid).env_commit
     repo = gitops.repo_dir(pid)
-    assert "python3-pytest" in (repo / ".foreman" / "Dockerfile").read_text()
-    assert (repo / ".foreman" / "check.sh").read_text() == "python3 --version\npytest --version\n"
+    assert "python3-pytest" in (repo / ".ai-factory" / "Dockerfile").read_text()
+    assert (
+        repo / ".ai-factory" / "check.sh"
+    ).read_text() == "python3 --version\npytest --version\n"
     (prompt,) = [system_text(r) for r in env_requests(llm)]
     assert "## The approved tasks" in prompt and "Write greeter" in prompt
     assert "Greeting a name gives" in prompt  # the requirements
@@ -180,20 +182,20 @@ def test_environment_needed_again_only_when_requirements_or_design_change(
 
 def test_parse_files_accepts_only_the_toolchain():
     files = parse_files(ENV_ANSWER)
-    assert sorted(files) == [".foreman/Dockerfile", ".foreman/check.sh"]
-    with pytest.raises(EnvError, match="outside .foreman"):
+    assert sorted(files) == [".ai-factory/Dockerfile", ".ai-factory/check.sh"]
+    with pytest.raises(EnvError, match="outside .ai-factory"):
         parse_files(ENV_ANSWER + "\n<<<FILE src/app.py\nprint(1)\n>>>\n")
-    with pytest.raises(EnvError, match="missing .foreman/check.sh"):
-        parse_files(ENV_ANSWER.split("<<<FILE .foreman/check.sh")[0])
-    with pytest.raises(images.ImageBuildError, match="foreman/executor-base"):
-        parse_files(ENV_ANSWER.replace("FROM foreman/executor-base", "FROM ubuntu:24.04"))
+    with pytest.raises(EnvError, match="missing .ai-factory/check.sh"):
+        parse_files(ENV_ANSWER.split("<<<FILE .ai-factory/check.sh")[0])
+    with pytest.raises(images.ImageBuildError, match="ai-factory/executor-base"):
+        parse_files(ENV_ANSWER.replace("FROM ai-factory/executor-base", "FROM ubuntu:24.04"))
 
 
 def test_tester_and_builder_may_not_touch_the_toolchain():
     p = Project(name="p", repo_url="x")
-    changed = [".foreman/Dockerfile", "src/app.py", "tests/test_app.py"]
-    assert roles.fence(p, roles.BUILDER, changed) == [".foreman/Dockerfile", "tests/test_app.py"]
-    assert roles.fence(p, roles.TESTER, changed) == [".foreman/Dockerfile", "src/app.py"]
+    changed = [".ai-factory/Dockerfile", "src/app.py", "tests/test_app.py"]
+    assert roles.fence(p, roles.BUILDER, changed) == [".ai-factory/Dockerfile", "tests/test_app.py"]
+    assert roles.fence(p, roles.TESTER, changed) == [".ai-factory/Dockerfile", "src/app.py"]
 
 
 def test_environment_agent_is_told_how_tests_run():

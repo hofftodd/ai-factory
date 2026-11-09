@@ -1,7 +1,7 @@
 """Executor containers (validation.md V4.1, V4.4, V8.1 with Docker).
 
-Needs a Docker daemon and the foreman/executor-base image:
-    foreman build-image
+Needs a Docker daemon and the ai-factory/executor-base image:
+    ai-factory build-image
 """
 
 from __future__ import annotations
@@ -14,19 +14,19 @@ import time
 
 import pytest
 
-from foreman.core.models import TaskState
-from foreman.engine import docker
-from foreman.orchestrator.main import Orchestrator
-from foreman.sandbox import running_containers
+from ai_factory.core.models import TaskState
+from ai_factory.engine import docker
+from ai_factory.orchestrator.main import Orchestrator
+from ai_factory.sandbox import running_containers
 from tests.helpers import TERMINAL, drive, make_project, make_task, task, wait_for
 
-IMAGE = os.environ.get("FOREMAN_TEST_IMAGE", "foreman/executor-base:latest")
+IMAGE = os.environ.get("AI_FACTORY_TEST_IMAGE", "ai-factory/executor-base:latest")
 
 
 def _docker_ready() -> bool:
     if not shutil.which("docker"):
         return False
-    # The same engine Foreman uses (e.g. the Lima VM on macOS), not just the CLI default.
+    # The same engine ai-factory uses (e.g. the Lima VM on macOS), not just the CLI default.
     return docker("image", "inspect", IMAGE).returncode == 0
 
 
@@ -38,13 +38,13 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def docker_runtime(monkeypatch):
-    monkeypatch.setenv("FOREMAN_RUNTIME", "docker")
-    monkeypatch.setenv("FOREMAN_EXECUTOR_IMAGE", IMAGE)
-    monkeypatch.setenv("FOREMAN_GITHUB_TOKEN", "ghp_must_not_leak")
+    monkeypatch.setenv("AI_FACTORY_RUNTIME", "docker")
+    monkeypatch.setenv("AI_FACTORY_EXECUTOR_IMAGE", IMAGE)
+    monkeypatch.setenv("AI_FACTORY_GITHUB_TOKEN", "ghp_must_not_leak")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-must-not-leak")
     yield
-    from foreman.config import get_settings
-    from foreman.sandbox import teardown_isolation
+    from ai_factory.config import get_settings
+    from ai_factory.sandbox import teardown_isolation
 
     teardown_isolation()  # each test's data dir is its own instance
     images = subprocess.run(
@@ -53,7 +53,7 @@ def docker_runtime(monkeypatch):
             "images",
             "-q",
             "--filter",
-            f"reference=foreman/project-{get_settings().instance_id}-*",
+            f"reference=ai-factory/project-{get_settings().instance_id}-*",
         ],
         capture_output=True,
         text=True,
@@ -77,7 +77,7 @@ async def test_task_runs_in_isolated_container(client, origin, env):
     await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=120)
     assert task(t["id"]).state == TaskState.DONE, task(t["id"]).reason
 
-    from foreman import gitops
+    from ai_factory import gitops
 
     repo = gitops.repo_dir(p["id"])
     assert (repo / "src" / "app.py").read_text() == "VALUE = 42\n"
@@ -88,8 +88,8 @@ async def test_task_runs_in_isolated_container(client, origin, env):
     mounts = (repo / "probe_mounts").read_text()
     # Only the task clone and the read-only control dir come from the host.
     assert str(env) not in mounts
-    assert " /workspace " in mounts and " /foreman " in mounts
-    ctl_line = next(line for line in mounts.splitlines() if " /foreman " in line)
+    assert " /workspace " in mounts and " /ai-factory " in mounts
+    ctl_line = next(line for line in mounts.splitlines() if " /ai-factory " in line)
     assert " ro," in ctl_line or ctl_line.split()[3].startswith("ro")
 
 
@@ -98,7 +98,7 @@ def test_stop_kills_container_within_10s(client, origin):
 
     procs = [
         subprocess.Popen(
-            [sys.executable, "-m", "foreman.cli", c],
+            [sys.executable, "-m", "ai_factory.cli", c],
             env=os.environ.copy(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -135,8 +135,8 @@ async def test_executor_against_fake_model(client, origin, kind, provider):
     chat API or Claude's Messages API."""
     from sqlmodel import select
 
-    from foreman.core.models import Event
-    from foreman.db import session
+    from ai_factory.core.models import Event
+    from ai_factory.db import session
     from tests.fakellm import MODEL, FakeLLM
 
     llm = FakeLLM().start()
@@ -158,7 +158,7 @@ async def test_executor_against_fake_model(client, origin, kind, provider):
             executor_kind=kind,
             role_bindings={"executor": {"node_id": n["id"], "model": model}},
         )
-        from foreman import gitops
+        from ai_factory import gitops
         from tests.test_pipeline import RUN_SH
 
         gitops.write_and_commit(p["id"], {"tests/run.sh": RUN_SH}, "test runner")
@@ -184,7 +184,7 @@ async def test_executor_against_fake_model(client, origin, kind, provider):
         assert "You are the Tester Agent" in prompts and "You are the Builder Agent" in prompts
         if provider == "anthropic":
             # Native Messages API, with the key added by the gateway on the host.
-            dump = os.environ.get("FOREMAN_DUMP_REQUESTS")
+            dump = os.environ.get("AI_FACTORY_DUMP_REQUESTS")
             if dump:
                 with open(dump, "w") as f:
                     json.dump({"requests": llm.requests, "headers": llm.headers}, f, default=str)
@@ -201,9 +201,9 @@ async def test_spec_to_done_with_agent(client, origin, kind):
     the planner and the coding agent."""
     from sqlmodel import select
 
-    from foreman import gitops
-    from foreman.core.models import ProjectPhase, Task
-    from foreman.db import session
+    from ai_factory import gitops
+    from ai_factory.core.models import ProjectPhase, Task
+    from ai_factory.db import session
     from tests.fakellm import MODEL, FakeLLM, system_text
     from tests.helpers import project
 
@@ -225,8 +225,8 @@ async def test_spec_to_done_with_agent(client, origin, kind):
     ]
 
     toolchain = (
-        f"<<<FILE .foreman/Dockerfile\nFROM {IMAGE}\nRUN echo ready > /tmp/toolchain\n>>>\n"
-        "<<<FILE .foreman/check.sh\ncat /tmp/toolchain\nbash --version\n>>>\nBash."
+        f"<<<FILE .ai-factory/Dockerfile\nFROM {IMAGE}\nRUN echo ready > /tmp/toolchain\n>>>\n"
+        "<<<FILE .ai-factory/check.sh\ncat /tmp/toolchain\nbash --version\n>>>\nBash."
     )
 
     def planner(req):
@@ -278,7 +278,7 @@ async def test_spec_to_done_with_agent(client, origin, kind):
         # The Environment Agent's image is built and checked before any task runs.
         await drive(orch, lambda: project(pid).phase != ProjectPhase.ENVIRONMENT, timeout=300)
         assert project(pid).env_commit, "the toolchain image was not prepared"
-        assert (gitops.repo_dir(pid) / ".foreman" / "check.sh").exists()
+        assert (gitops.repo_dir(pid) / ".ai-factory" / "check.sh").exists()
         await drive(orch, lambda: project(pid).phase == ProjectPhase.DONE, timeout=600)
         assert all(task(t.id).state == TaskState.DONE for t in planned)
         repo = gitops.repo_dir(pid)
@@ -295,7 +295,7 @@ async def test_spec_to_done_with_agent(client, origin, kind):
 def _toolchain(nonce: str, extra: str = "") -> str:
     # The nonce makes each test run build afresh instead of reusing an earlier image.
     return (
-        "FROM foreman/executor-base\n"
+        "FROM ai-factory/executor-base\n"
         f"# test {nonce}\n"
         "USER root\n"
         "RUN echo toolchain-ok > /opt/toolchain\n"
@@ -305,7 +305,9 @@ def _toolchain(nonce: str, extra: str = "") -> str:
 
 
 def _remove_project_images() -> None:
-    out = docker("images", "-q", "--filter", "label=foreman=1", "foreman/project-*").stdout.split()
+    out = docker(
+        "images", "-q", "--filter", "label=ai-factory=1", "ai-factory/project-*"
+    ).stdout.split()
     if out:
         docker("rmi", "-f", *out)
 
@@ -313,11 +315,11 @@ def _remove_project_images() -> None:
 async def test_tasks_run_in_the_project_toolchain_image(client, origin, tmp_path):
     from sqlmodel import select
 
-    from foreman.core.models import Event, TaskRun
-    from foreman.db import session
+    from ai_factory.core.models import Event, TaskRun
+    from ai_factory.db import session
     from tests.test_images import add_to_origin
 
-    add_to_origin(origin, tmp_path, {".foreman/Dockerfile": _toolchain(str(time.time_ns()))})
+    add_to_origin(origin, tmp_path, {".ai-factory/Dockerfile": _toolchain(str(time.time_ns()))})
     p = make_project(client, origin)
     try:
         a = make_task(
@@ -346,18 +348,18 @@ async def test_tasks_run_in_the_project_toolchain_image(client, origin, tmp_path
 async def test_broken_toolchain_fails_as_configuration(client, origin, tmp_path):
     from sqlmodel import select
 
-    from foreman.core.models import TaskRun
-    from foreman.db import session
+    from ai_factory.core.models import TaskRun
+    from ai_factory.db import session
     from tests.test_images import add_to_origin
 
     broken = _toolchain(str(time.time_ns()), "RUN exit 7\n")
-    add_to_origin(origin, tmp_path, {".foreman/Dockerfile": broken})
+    add_to_origin(origin, tmp_path, {".ai-factory/Dockerfile": broken})
     p = make_project(client, origin)
     try:
         t = make_task(client, p["id"], "echo never > ran.txt")
         await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=300)
         assert task(t["id"]).state == TaskState.FAILED
-        assert "building .foreman/Dockerfile failed" in task(t["id"]).reason
+        assert "building .ai-factory/Dockerfile failed" in task(t["id"]).reason
         with session() as s:
             run = s.exec(select(TaskRun)).one()
         assert run.failure_kind == "config"
@@ -366,13 +368,13 @@ async def test_broken_toolchain_fails_as_configuration(client, origin, tmp_path)
 
 
 async def test_toolchain_must_derive_from_base(client, origin):
-    from foreman import gitops
+    from ai_factory import gitops
 
     p = make_project(client, origin, watchdog={})
-    gitops.write_and_commit(p["id"], {".foreman/Dockerfile": "FROM ubuntu:24.04\n"}, "bad")
+    gitops.write_and_commit(p["id"], {".ai-factory/Dockerfile": "FROM ubuntu:24.04\n"}, "bad")
     t = make_task(client, p["id"], script="true")
     await drive(Orchestrator(), lambda: task(t["id"]).state == TaskState.BLOCKED, timeout=60)
-    assert "must build FROM foreman/executor-base" in task(t["id"]).reason
+    assert "must build FROM ai-factory/executor-base" in task(t["id"]).reason
 
 
 # -- role sandboxes (Tester / Builder) ----------------------------------------------
@@ -391,7 +393,7 @@ async def test_pipeline_red_to_green_in_containers(client, origin):
 
 
 async def test_builder_cannot_write_tests_inside_its_container(client, origin):
-    from foreman import gitops
+    from ai_factory import gitops
     from tests.test_pipeline import BUILDER, add_task, scripts
 
     p = make_project(client, origin)
@@ -418,9 +420,9 @@ async def test_tester_cannot_write_code_inside_its_container(client, origin):
 def test_isolated_network_reaches_only_the_gateway(tmp_path):
     """Egress lockdown: on the isolated network an executor reaches the model gateway
     through the relay, and nothing else - not the host, the LAN or the internet."""
-    from foreman import doctor, engine
-    from foreman.engine import docker_env
-    from foreman.sandbox import RELAY_URL, DockerRuntime, StepSpec, ensure_relay
+    from ai_factory import doctor, engine
+    from ai_factory.engine import docker_env
+    from ai_factory.sandbox import RELAY_URL, DockerRuntime, StepSpec, ensure_relay
 
     eng = engine.detect()
     server, port = doctor._serve(eng.bind_host)  # stands in for the gateway
@@ -430,7 +432,7 @@ def test_isolated_network_reaches_only_the_gateway(tmp_path):
 
     def run(script: str, network: str = "isolated") -> subprocess.CompletedProcess[str]:
         spec = StepSpec(
-            name=f"foreman-egress-{time.time_ns() % 10**9}",
+            name=f"ai-factory-egress-{time.time_ns() % 10**9}",
             workspace=ws,
             ctl_dir=ctl,
             command=["sh", "-c", script],
@@ -447,7 +449,7 @@ def test_isolated_network_reaches_only_the_gateway(tmp_path):
     try:
         ensure_relay(port)
         through_relay = run(f"curl -fsS --max-time 10 {RELAY_URL}/")
-        assert through_relay.returncode == 0 and "foreman-doctor" in through_relay.stdout, (
+        assert through_relay.returncode == 0 and "ai-factory-doctor" in through_relay.stdout, (
             through_relay.stderr
         )
         for url in (
@@ -505,10 +507,10 @@ async def test_pi_stuck_in_a_loop_is_stopped_by_the_watchdog(client, origin):
 
 async def test_environment_check_runs_in_the_image_without_network(tmp_path):
     """The Environment Agent's image is built for real and check.sh runs inside it."""
-    from foreman import images
-    from foreman.orchestrator.environment import run_check
+    from ai_factory import images
+    from ai_factory.orchestrator.environment import run_check
 
-    env = tmp_path / ".foreman"
+    env = tmp_path / ".ai-factory"
     env.mkdir()
     (env / "Dockerfile").write_text(f"FROM {IMAGE}\nRUN echo built > /tmp/built\n")
     (env / "check.sh").write_text("cat /tmp/built\nid -un\n")

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import subprocess
 
-from foreman import testresults as tr
-from foreman.core import roles
-from foreman.core.models import Project
+from ai_factory import testresults as tr
+from ai_factory.core import roles
+from ai_factory.core.models import Project
 
 JUNIT = """<?xml version="1.0"?>
 <testsuites><testsuite name="pytest" tests="4">

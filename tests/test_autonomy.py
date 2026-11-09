@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 from sqlmodel import col, select
 
-from foreman import gitops
-from foreman.core.models import (
+from ai_factory import gitops
+from ai_factory.core.models import (
     Gate,
     GateKind,
     GateState,
@@ -21,10 +21,10 @@ from foreman.core.models import (
     TaskRun,
     TaskState,
 )
-from foreman.core.watchdog import failure_signature, repeated
-from foreman.db import session
-from foreman.gateway import trip
-from foreman.orchestrator.main import Orchestrator
+from ai_factory.core.watchdog import failure_signature, repeated
+from ai_factory.db import session
+from ai_factory.gateway import trip
+from ai_factory.orchestrator.main import Orchestrator
 from tests.conftest import git
 from tests.fakellm import FakeLLM, system_text
 from tests.helpers import TERMINAL, drive, make_task, project, task
@@ -259,7 +259,7 @@ async def test_rejected_merge_fails_the_task(client, origin):
 
 
 def test_inbox_lists_pending_with_names(client, origin):
-    from foreman.core import gates
+    from ai_factory.core import gates
 
     p = auto_project(client, origin)
     gates.open_gate(p["id"], GateKind.MILESTONE, "Ship it?")
@@ -282,7 +282,7 @@ async def test_replan_after_task_applies_ops(client, origin, llm, planner):
             t.key = "TA" if t.id == a["id"] else "TB"
             s.add(t)
         s.commit()
-    from foreman.core.models import Project as ProjectRow
+    from ai_factory.core.models import Project as ProjectRow
 
     with session() as s:
         row = s.get(ProjectRow, p["id"])
@@ -379,7 +379,7 @@ async def test_spec_change_is_always_gated(client, origin, llm, planner):
     orch = Orchestrator()
     await drive(orch, lambda: bool(gates_of(p["id"], GateKind.SPEC_CHANGE)))
     (gate,) = gates_of(p["id"], GateKind.SPEC_CHANGE)
-    # Approved: the Project Planning Agent (not Foreman, not the Task Planner) edits the
+    # Approved: the Project Planning Agent (not ai-factory, not the Task Planner) edits the
     # documents. This older project keeps its original spec.md name.
     planner.chat = "Done.\n<<<FILE specs/001-initial/spec.md\n# Spec\n- FR-1 x\n- FR-2 login\n>>>"
     client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})
@@ -406,7 +406,7 @@ async def test_acceptance_pass_completes_and_pushes(client, origin):
     client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})
     await drive(orch, lambda: gates_of(p["id"], GateKind.MILESTONE)[0].handled_at is not None)
     # The milestone branch is now on the origin (a local bare repo here: no PR).
-    assert "foreman/m1" in git("branch", "--list", "foreman/m1", cwd=origin)
+    assert "ai-factory/m1" in git("branch", "--list", "ai-factory/m1", cwd=origin)
 
 
 async def test_acceptance_failure_goes_to_replanner_then_user(client, origin, llm, planner):
@@ -446,9 +446,9 @@ def test_new_gate_sends_push_notification(client, origin, monkeypatch):
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("FOREMAN_NTFY_URL", f"http://127.0.0.1:{server.server_address[1]}/topic")
-    monkeypatch.setenv("FOREMAN_PUBLIC_URL", "http://foreman.lan:8700")
-    from foreman.core import gates
+    monkeypatch.setenv("AI_FACTORY_NTFY_URL", f"http://127.0.0.1:{server.server_address[1]}/topic")
+    monkeypatch.setenv("AI_FACTORY_PUBLIC_URL", "http://ai-factory.lan:8700")
+    from ai_factory.core import gates
 
     p = auto_project(client, origin)
     gates.open_gate(p["id"], GateKind.MILESTONE, "Ship it?", "all green")
@@ -456,7 +456,8 @@ def test_new_gate_sends_push_notification(client, origin, monkeypatch):
     body, headers = got[0]
     assert body == "Ship it?\nall green"
     assert (
-        headers["Title"] == "foreman: auto" and headers["Click"] == "http://foreman.lan:8700/inbox"
+        headers["Title"] == "ai-factory: auto"
+        and headers["Click"] == "http://ai-factory.lan:8700/inbox"
     )
     server.shutdown()
 
@@ -464,10 +465,10 @@ def test_new_gate_sends_push_notification(client, origin, monkeypatch):
 async def test_project_stop_kills_running_acceptance(client, origin):
     from concurrent.futures import ThreadPoolExecutor
 
-    from foreman.core.models import Control, ControlAction, ControlScope
-    from foreman.db import control_session
-    from foreman.sandbox import group_alive
-    from foreman.supervisor.main import apply_control
+    from ai_factory.core.models import Control, ControlAction, ControlScope
+    from ai_factory.db import control_session
+    from ai_factory.sandbox import group_alive
+    from ai_factory.supervisor.main import apply_control
 
     p = auto_project(client, origin)
     client.patch(f"/api/projects/{p['id']}", json={"acceptance_cmd": "sleep 300"})

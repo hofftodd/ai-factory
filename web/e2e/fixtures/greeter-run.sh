@@ -1,7 +1,7 @@
 # A tiny test runner for the screenshot scene: every tests/check_*.sh is a test.
-# Writes JUnit XML and LCOV into $FOREMAN_RESULTS like a real runner would; each line
+# Writes JUnit XML and LCOV into $AI_FACTORY_RESULTS like a real runner would; each line
 # of the project's *.sh files counts as covered unless it is marked "# uncovered".
-out="${FOREMAN_RESULTS:-/tmp}"
+out="${AI_FACTORY_RESULTS:-/tmp}"
 pass=0; fail=0; cases=""
 for t in tests/check_*.sh; do
   name=$(basename "$t" .sh)

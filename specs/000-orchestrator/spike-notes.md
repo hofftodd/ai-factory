@@ -2,7 +2,7 @@
 
 M0 was skipped in favour of measuring models on the real hardware with
 [ai-bench](https://github.com/hofftodd/ai-bench) (Oct 23 – Nov 8, 2026). This
-file is M0's output: the measurements that matter to Foreman, and the default
+file is M0's output: the measurements that matter to ai-factory, and the default
 role → model bindings they lead to. It resolves spec OQ-1.
 
 Sources: `ANALYSIS.md` (R9700), `ANALYSIS-mac.md` (Mac Studio) and
@@ -14,7 +14,7 @@ Sources: `ANALYSIS.md` (R9700), `ANALYSIS-mac.md` (Mac Studio) and
   solutions at 32k and 64k output-token budgets. No tools. About ±12 points of
   run-to-run noise, so differences under ~3 problems don't rank models.
 - **terminal-x3**: 18 agentic shell tasks, 3 runs each, in a Docker sandbox, through
-  the model's own tool calls. Closest to what a Foreman coding agent does. It is
+  the model's own tool calls. Closest to what an ai-factory coding agent does. It is
   saturated at the top (several models at 96–100%), so it confirms tool calling
   more than it ranks.
 - **Speed**: generation and prompt processing at 512 and 8k tokens, time to first
@@ -64,13 +64,13 @@ large budget: its answers are long).
 - **One endpoint, swap-aware:** with ai-swap on both machines (Nov 2026), every
   model is reachable through either machine's endpoint (`http://studio.local:8080/v1`
   or `http://mini-ubuntu.local:8080/v1`), so nodes can be "one node per model" on
-  the same URL, each with its own capacity and context window. Foreman reads
+  the same URL, each with its own capacity and context window. ai-factory reads
   ai-swap's status and won't start work that would swap out a model a running
   step is using; the bindings above fit together on each machine, so they never
   wait for each other.
-- **Persistent servers:** ai-bench starts and stops each server per run. Foreman
+- **Persistent servers:** ai-bench starts and stops each server per run. ai-factory
   needs them always up, so ds4-server and oMLX need LaunchAgents on the Mac.
-- **Sampling is set on the servers, not in Foreman.** Foreman's gateway passes
+- **Sampling is set on the servers, not in ai-factory.** ai-factory's gateway passes
   the agent's request through, and bindings carry no sampling. Recommended:
   ds4-q4 temperature 1.0, top_p 1.0; flint temperature 1.0, top_p 0.95,
   top_k 20, earlier reasoning kept in context; ThinkingCap temperature 0.6,
@@ -86,5 +86,5 @@ large budget: its answers are long).
 - ds4-q4 and flint busy together on the Mac (memory pressure, speed).
 - A second 64k LiveCodeBench pass for ds4-q4 and flint (the two picks lean on one run each).
 - A harder terminal suite: terminal-x3 no longer separates the top models.
-- Real Foreman runs: the bench tasks are smaller than Foreman's, and context
+- Real ai-factory runs: the bench tasks are smaller than ai-factory's, and context
   packs may be longer than the 8k prompts measured.

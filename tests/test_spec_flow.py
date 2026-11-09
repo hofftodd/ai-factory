@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 from sqlmodel import col, select
 
-from foreman import gitops
-from foreman.core.models import (
+from ai_factory import gitops
+from ai_factory.core.models import (
     Event,
     JobState,
     PlannerJob,
@@ -20,8 +20,8 @@ from foreman.core.models import (
     Task,
     TaskState,
 )
-from foreman.db import session
-from foreman.orchestrator.main import Orchestrator, recover
+from ai_factory.db import session
+from ai_factory.orchestrator.main import Orchestrator, recover
 from tests.conftest import git
 from tests.fakellm import FakeLLM, last_user_text, system_text
 from tests.helpers import TERMINAL, drive, project
@@ -460,7 +460,7 @@ def test_recover_fails_interrupted_jobs(client, origin, llm):
     with session() as s:
         s.add(PlannerJob(project_id=p["id"], kind="decompose", state=JobState.RUNNING))
         s.commit()
-    from foreman.core.models import Project as ProjectRow
+    from ai_factory.core.models import Project as ProjectRow
 
     with session() as s:
         row = s.get(ProjectRow, p["id"])
@@ -541,7 +541,7 @@ async def test_runs_to_done_without_any_input_when_optional_gates_are_off(client
         s.commit()
     await drive(orch, lambda: project(pid).phase == ProjectPhase.DONE, timeout=90)
     with session() as s:
-        from foreman.core.models import Gate, PlanRevision
+        from ai_factory.core.models import Gate, PlanRevision
 
         assert s.exec(select(Gate).where(Gate.project_id == pid)).all() == []
         reviews = s.exec(select(PlanRevision).where(PlanRevision.project_id == pid)).all()

@@ -1,15 +1,15 @@
-# foreman/executor-base: the sandbox every executor step runs in.
+# ai-factory/executor-base: the sandbox every executor step runs in.
 #
 # Minimal Ubuntu Server userland plus git and the executor CLIs. Projects that
-# need language toolchains add them in their own `.foreman/Dockerfile`
-# (FROM foreman/executor-base) - not here. pi needs Node.js; it gets a private copy
+# need language toolchains add them in their own `.ai-factory/Dockerfile`
+# (FROM ai-factory/executor-base) - not here. pi needs Node.js; it gets a private copy
 # under /opt/pi that is not on PATH, so `node` is still the project's own choice.
 #
-# socat runs the gateway relay for the isolated executor network (foreman.sandbox).
+# socat runs the gateway relay for the isolated executor network (ai_factory.sandbox).
 #
-#   docker build -t foreman/executor-base:latest docker/executor-base
-#   docker build --build-arg PI_VERSION=1.4.0 -t foreman/executor-base:latest docker/executor-base
-#   docker build --build-arg WITH_AIDER=1 -t foreman/executor-base:latest docker/executor-base
+#   docker build -t ai-factory/executor-base:latest docker/executor-base
+#   docker build --build-arg PI_VERSION=1.4.0 -t ai-factory/executor-base:latest docker/executor-base
+#   docker build --build-arg WITH_AIDER=1 -t ai-factory/executor-base:latest docker/executor-base
 
 FROM ubuntu:24.04
 
@@ -74,8 +74,8 @@ RUN userdel -r ubuntu 2>/dev/null || true \
  && useradd -m -u 1000 -g 1000 -s /bin/bash agent \
  # Task clones are mounted from the host and may be owned by another uid.
  && git config --system safe.directory '*' \
- && git config --system user.name foreman-agent \
- && git config --system user.email agent@foreman.local
+ && git config --system user.name ai-factory-agent \
+ && git config --system user.email agent@ai-factory.local
 
 USER agent
 WORKDIR /workspace

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 
-from foreman.core.contextpack import budget_tokens
-from foreman.core.models import Project, Task
-from foreman.executors import EXECUTORS, ExecutorContext
-from foreman.executors.pi import PiExecutor, PiOutput
+from ai_factory.core.contextpack import budget_tokens
+from ai_factory.core.models import Project, Task
+from ai_factory.executors import EXECUTORS, ExecutorContext
+from ai_factory.executors.pi import PiExecutor, PiOutput
 
 
 def test_pi_prepare(tmp_path):
     inv = PiExecutor().prepare(
         Project(name="p", repo_url="x"),
         Task(project_id=1, title="t"),
-        "http://foreman-gw:8701/g/tok/v1",
+        "http://ai-factory-gw:8701/g/tok/v1",
         "qwen3-coder",
         tmp_path,
         "# Task T1\n",
@@ -22,10 +22,10 @@ def test_pi_prepare(tmp_path):
     )
     assert (tmp_path / "prompt.md").read_text() == "# Task T1\n"
     cfg = json.loads((tmp_path / "pi" / "models.json").read_text())
-    provider = cfg["providers"]["foreman"]
-    assert provider["baseUrl"] == "http://foreman-gw:8701/g/tok/v1"
+    provider = cfg["providers"]["ai-factory"]
+    assert provider["baseUrl"] == "http://ai-factory-gw:8701/g/tok/v1"
     assert provider["api"] == "openai-completions"
-    assert provider["apiKey"] == "foreman"  # never a real key: the gateway adds it
+    assert provider["apiKey"] == "ai-factory"  # never a real key: the gateway adds it
     assert provider["models"] == [
         {"id": "qwen3-coder", "name": "qwen3-coder", "maxTokens": 8192, "contextWindow": 32768}
     ]
@@ -33,7 +33,7 @@ def test_pi_prepare(tmp_path):
     for flag in ("--mode json", "--no-session", "--offline", "--no-context-files", "--no-approve"):
         assert flag in script
     assert 'PI_CODING_AGENT_DIR="$HOME/.pi/agent"' in script
-    assert inv.env == {"FOREMAN_MODEL": "qwen3-coder"}
+    assert inv.env == {"AI_FACTORY_MODEL": "qwen3-coder"}
     assert inv.output is not None
 
 

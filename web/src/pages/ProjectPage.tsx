@@ -317,7 +317,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
       </div>
       {swapWarnings.map((w) => (
         <div className="swap-note" key={w} role="note">
-          <b>Model swaps:</b> {w} Foreman runs those agents one after the other rather than
+          <b>Model swaps:</b> {w} ai-factory runs those agents one after the other rather than
           side by side, so this costs time, not correctness. A model that fits next to the
           others, or one on another machine, avoids it.
         </div>
@@ -495,7 +495,7 @@ function Roles() {
   return (
     <section className="card">
       <h2>Agents and what they may do</h2>
-      <p className="small muted">Fixed by Foreman. The Orchestrator refuses anything outside an agent's role and logs it.</p>
+      <p className="small muted">Fixed by ai-factory. The Orchestrator refuses anything outside an agent's role and logs it.</p>
       <div className="roles">
         {data.map((r) => (
           <div key={r.key} className="role">
@@ -593,7 +593,7 @@ function EnvironmentPanel({ project, events, onChange }: { project: Project; eve
       <h2>Preparing the environment</h2>
       <p className="muted small">
         The Environment Agent writes the toolchain image every Tester and Builder works in: the language, test framework,
-        coverage and build tools the documents and tasks need. Foreman builds it and runs its check script; tasks start
+        coverage and build tools the documents and tasks need. ai-factory builds it and runs its check script; tasks start
         once both pass.
       </p>
       {working ? (

@@ -5,6 +5,6 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: { "/api": process.env.FOREMAN_API ?? "http://127.0.0.1:8700" },
+    proxy: { "/api": process.env.AI_FACTORY_API ?? "http://127.0.0.1:8700" },
   },
 });

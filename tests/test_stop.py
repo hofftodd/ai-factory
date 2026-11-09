@@ -16,9 +16,9 @@ import time
 import pytest
 from sqlmodel import col, select
 
-from foreman.core.models import RunState, TaskRun, TaskState
-from foreman.db import session
-from foreman.sandbox import alive_in_group
+from ai_factory.core.models import RunState, TaskRun, TaskState
+from ai_factory.db import session
+from ai_factory.sandbox import alive_in_group
 from tests.helpers import make_project, make_task, task, wait_for
 
 LONG = "sleep 300 & sleep 300 & wait"
@@ -26,7 +26,7 @@ LONG = "sleep 300 & sleep 300 & wait"
 
 def _start(component: str) -> subprocess.Popen:
     return subprocess.Popen(
-        [sys.executable, "-m", "foreman.cli", component],
+        [sys.executable, "-m", "ai_factory.cli", component],
         env=os.environ.copy(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -113,7 +113,7 @@ def test_stop_task_kills_process_tree_within_10s(client, origin, procs):
     wait_for(lambda: task(t["id"]).state == TaskState.STOPPED_BY_USER)
     assert _run_state(run.id) == RunState.STOPPED
     # Work is preserved for inspection / retry.
-    from foreman import gitops
+    from ai_factory import gitops
 
     assert (gitops.task_dir(p["id"], t["id"]) / "wip.txt").read_text() == "partial\n"
     diff = client.get(f"/api/tasks/{t['id']}/diff").json()
@@ -191,8 +191,8 @@ def test_late_stop_bookkeeping_does_not_undo_resume(client, origin):
     """A Stop the supervisor finishes after the user pressed Resume must not re-pause."""
     from concurrent.futures import ThreadPoolExecutor
 
-    from foreman.core.models import Control, ControlAction, ControlScope
-    from foreman.supervisor.main import apply_control
+    from ai_factory.core.models import Control, ControlAction, ControlScope
+    from ai_factory.supervisor.main import apply_control
     from tests.helpers import project
 
     p = make_project(client, origin)

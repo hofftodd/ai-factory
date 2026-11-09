@@ -1,20 +1,20 @@
 import pytest
 
-from foreman import gitops
+from ai_factory import gitops
 from tests.conftest import git
 
 
 def test_clone_and_task_flow(origin):
-    default = gitops.clone_project(1, str(origin), "foreman/m1")
+    default = gitops.clone_project(1, str(origin), "ai-factory/m1")
     assert default == "main"
     repo = gitops.repo_dir(1)
-    assert git("branch", "--show-current", cwd=repo).strip() == "foreman/m1"
+    assert git("branch", "--show-current", cwd=repo).strip() == "ai-factory/m1"
 
-    clone = gitops.prepare_task_clone(1, 7, "foreman/m1")
+    clone = gitops.prepare_task_clone(1, 7, "ai-factory/m1")
     # Standalone clone: real .git dir, no remote pointing back at the host repo.
     assert (clone / ".git").is_dir()
     assert git("remote", cwd=clone).strip() == ""
-    assert git("branch", "--show-current", cwd=clone).strip() == "foreman/task-7"
+    assert git("branch", "--show-current", cwd=clone).strip() == "ai-factory/task-7"
 
     (clone / "src" / "app.py").write_text("VALUE = 2\n")
     (clone / "src" / "new.py").write_text("X = 1\n")
@@ -32,19 +32,19 @@ def test_clone_and_task_flow(origin):
 
 
 def test_reuse_task_clone_keeps_work(origin):
-    gitops.clone_project(1, str(origin), "foreman/m1")
-    clone = gitops.prepare_task_clone(1, 1, "foreman/m1")
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    clone = gitops.prepare_task_clone(1, 1, "ai-factory/m1")
     (clone / "partial.txt").write_text("wip")
-    assert gitops.prepare_task_clone(1, 1, "foreman/m1") == clone
+    assert gitops.prepare_task_clone(1, 1, "ai-factory/m1") == clone
     assert (clone / "partial.txt").exists()
     gitops.reset_task_clone(1, 1)
     assert not clone.exists()
 
 
 def test_merge_conflict_is_reported_and_aborted(origin):
-    gitops.clone_project(1, str(origin), "foreman/m1")
-    a = gitops.prepare_task_clone(1, 1, "foreman/m1")
-    b = gitops.prepare_task_clone(1, 2, "foreman/m1")
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    a = gitops.prepare_task_clone(1, 1, "ai-factory/m1")
+    b = gitops.prepare_task_clone(1, 2, "ai-factory/m1")
     (a / "src" / "app.py").write_text("VALUE = 'a'\n")
     (b / "src" / "app.py").write_text("VALUE = 'b'\n")
     gitops.commit_all(a, "a")
@@ -64,14 +64,14 @@ def test_out_of_scope():
 def test_empty_repo_gets_root_commit(tmp_path):
     bare = tmp_path / "empty.git"
     git("init", "-q", "--bare", "-b", "main", str(bare), cwd=tmp_path)
-    gitops.clone_project(3, str(bare), "foreman/m1")
+    gitops.clone_project(3, str(bare), "ai-factory/m1")
     assert gitops.has_commits(gitops.repo_dir(3))
 
 
 def test_token_never_in_git_config(origin, monkeypatch):
-    monkeypatch.setenv("FOREMAN_GITHUB_TOKEN", "secret-token")
+    monkeypatch.setenv("AI_FACTORY_GITHUB_TOKEN", "secret-token")
     args = gitops._auth_args("https://github.com/o/r.git")
     assert args and "secret-token" not in " ".join(args)  # base64, header only
-    gitops.clone_project(1, str(origin), "foreman/m1")
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
     cfg = (gitops.repo_dir(1) / ".git" / "config").read_text()
     assert "secret" not in cfg and "extraheader" not in cfg
