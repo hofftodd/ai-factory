@@ -10,8 +10,8 @@ def test_project_lifecycle(client, origin):
     p = make_project(client, origin, name="demo")
     assert p["default_branch"] == "main"
     assert client.get("/api/projects").json()[0]["name"] == "demo"
-    r = client.patch(f"/api/projects/{p['id']}", json={"test_cmd": "true"})
-    assert r.json()["test_cmd"] == "true"
+    r = client.patch(f"/api/projects/{p['id']}", json={"name": "renamed"})
+    assert r.json()["name"] == "renamed"
     assert client.delete(f"/api/projects/{p['id']}").status_code == 204
     assert client.get("/api/projects").json() == []
 
@@ -145,3 +145,12 @@ def test_github_token_check(client, monkeypatch):
     client.put("/api/settings/github", json={"token": "bad"})
     r = client.post("/api/settings/github/check").json()
     assert not r["ok"] and "401" in r["error"] and seen == ["good", "bad"]
+
+
+def test_test_note_is_saved_and_editable(client, origin):
+    from tests.helpers import make_project
+
+    p = make_project(client, origin, test_note="  make test  ")
+    assert p["test_note"] == "make test"
+    r = client.patch(f"/api/projects/{p['id']}", json={"test_note": "tox -e py312"})
+    assert r.status_code == 200 and r.json()["test_note"] == "tox -e py312"

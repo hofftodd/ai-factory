@@ -1,6 +1,7 @@
 """Planner jobs, run by the orchestrator: the Project Planning Agent's chat turns
-(JobKind.CHAT) and the Task Planning Agent's breakdown, splits and plan reviews
-(DECOMPOSE, SPLIT, REVIEW). See core/roles.py for what each may do.
+(JobKind.CHAT), the Task Planning Agent's breakdown, splits and plan reviews
+(DECOMPOSE, SPLIT, REVIEW) and the Environment Agent's toolchain image (ENVIRONMENT).
+See core/roles.py for what each may do.
 
 Jobs stream from the planner model and are stoppable mid-stream: Stop / E-stop
 on the project (or the supervisor marking the job stopped) closes the model
@@ -19,7 +20,7 @@ from sqlalchemy import delete, update
 from sqlmodel import col, select
 
 from foreman import gitops
-from foreman.core import roles, spend
+from foreman.core import gates, roles, spend
 from foreman.core.contextpack import estimate_tokens, repo_files
 from foreman.core.models import (
     JobKind,
@@ -100,7 +101,11 @@ def read_docs(project: Project) -> dict[str, str]:
 
 def job_role(kind: JobKind) -> str:
     """Which agent runs a planner job."""
-    return roles.PROJECT_PLANNER if kind == JobKind.CHAT else roles.TASK_PLANNER
+    if kind == JobKind.CHAT:
+        return roles.PROJECT_PLANNER
+    if kind == JobKind.ENVIRONMENT:
+        return roles.ENVIRONMENT
+    return roles.TASK_PLANNER
 
 
 def _fit_history(messages: list[dict[str, str]], budget: int) -> list[dict[str, str]]:
@@ -268,6 +273,10 @@ class JobRunner:
                 await self._decompose(node, model)
             elif self.kind == JobKind.SPLIT:
                 await self._split(node, model)
+            elif self.kind == JobKind.ENVIRONMENT:
+                from foreman.orchestrator.environment import run_environment
+
+                await run_environment(self, node, model)
             else:
                 await self._review(node, model)
         except Aborted:
@@ -305,6 +314,10 @@ class JobRunner:
                 split_failed(self.task_id, error)
         elif self.kind == JobKind.REVIEW:
             emit(self.project_id, None, "system", f"replanning failed: {error}", job_id=self.job_id)
+        elif self.kind == JobKind.ENVIRONMENT:
+            from foreman.orchestrator.environment import failed
+
+            failed(self.project_id, error)
         else:
             planner_note(self.project_id, f"(planner error: {error})", self.job_id)
 
@@ -366,14 +379,16 @@ class JobRunner:
         system: str,
         first_message: str,
         what: str,
+        done: tuple[str, ...] = (),
     ) -> list[TaskSpec]:
-        """Ask for a task list until it parses and passes the checks (or attempts run out)."""
+        """Ask for a task list until it parses and passes the checks (or attempts run out).
+        `done` are keys of finished tasks (see parse_tasks)."""
         messages = [{"role": "user", "content": first_message}]
         last_error = ""
         for attempt in range(1, MAX_DECOMPOSE_ATTEMPTS + 1):
             text = await self._call(node, model, system, messages)
             try:
-                return parse_tasks(text)
+                return parse_tasks(text, done)
             except PlanError as e:
                 last_error = str(e)
             emit(
@@ -392,19 +407,42 @@ class JobRunner:
 
     async def _decompose(self, node: Node, model: str) -> None:
         project = self.project()
-        system = decompose_system_prompt(project, read_docs(project))
+        # Back in planning after some work: plan only what remains.
+        done = finished_tasks(self.project_id)
+        summaries = [
+            {"key": key_of(t), "title": t.title, "goal": t.description, "criteria": t.criteria}
+            for t in done
+        ]
+        system = decompose_system_prompt(project, read_docs(project), summaries)
         specs = await self._plan_loop(
-            node, model, system, "Break the plan into tasks now.", "task breakdown"
+            node,
+            model,
+            system,
+            "Break the plan into tasks now.",
+            "task breakdown",
+            done=tuple(key_of(t) for t in done),
         )
         if not finish_job(self.job_id, (JobState.RUNNING,), JobState.DONE):
             return
-        self._create_tasks(project, standard_tasks(specs))
+        kinds = {key_of(t): t.kind for t in done}
+        # Finished acceptance tests are redone only if the criteria changed since they
+        # were written (the Tester's commit holds the criteria as it saw them).
+        accepted = [t for t in done if t.kind == "acceptance"]
+        changed = not accepted or gitops.file_changed_since(
+            self.project_id, doc_path(project, "acceptance"), accepted[-1].tests_commit
+        )
+        self._create_tasks(project, standard_tasks(specs, kinds, changed), done)
 
-    def _create_tasks(self, project: Project, specs: list[TaskSpec]) -> None:
+    def _create_tasks(
+        self, project: Project, specs: list[TaskSpec], done: list[Task] | None = None
+    ) -> None:
+        done = done or []
         review = bool((project.gates or {}).get("plan_approval", True))
         initial = TaskState.PROPOSED if review else TaskState.QUEUED
         ordered = topo_order(specs)
         ids: dict[str, int] = {}
+        if not review:
+            discard_unfinished(self.project_id, "replaced by the new plan")
         with session() as s:
             s.exec(  # type: ignore[call-overload]
                 delete(Task).where(
@@ -419,7 +457,19 @@ class JobRunner:
                 assert row.id is not None
                 ids[t.key] = row.id
             s.commit()
-        rows: list[dict[str, Any]] = [t.__dict__ for t in ordered]
+        rows: list[dict[str, Any]] = [
+            {
+                "key": key_of(t),
+                "title": t.title,
+                "goal": t.description,
+                "criteria": t.criteria,
+                "req_refs": t.req_refs,
+                "kind": t.kind,
+                "state": t.state.value,
+            }
+            for t in done
+        ]
+        rows += [t.__dict__ for t in ordered]
         gitops.write_and_commit(
             self.project_id,
             {doc_path(project, "tasks"): render_tasks_md(project, rows)},
@@ -429,16 +479,23 @@ class JobRunner:
             with session() as s:
                 p = s.get(Project, self.project_id)
                 assert p is not None
-                p.baseline_tasks = len(ordered)
+                p.baseline_tasks = len(done) + len(ordered)
                 s.add(p)
                 s.commit()
-        set_phase(self.project_id, ProjectPhase.PLAN_REVIEW if review else ProjectPhase.EXECUTE)
-        planner_note(
-            self.project_id,
-            f"Broke the plan into {len(ordered)} tasks, including setup, acceptance tests and "
-            "documentation.",
-            self.job_id,
+        if review:
+            set_phase(self.project_id, ProjectPhase.PLAN_REVIEW)
+        else:
+            from foreman.orchestrator.environment import start_execution
+
+            start_execution(self.project_id)
+        note = (
+            f"Planned the remaining work: {len(ordered)} new tasks. The {len(done)} finished "
+            "tasks are kept; the new plan replaces the unfinished ones."
+            if done
+            else f"Broke the plan into {len(ordered)} tasks, including setup, acceptance tests "
+            "and documentation."
         )
+        planner_note(self.project_id, note, self.job_id)
 
     # -- split ---------------------------------------------------------------
 
@@ -496,6 +553,47 @@ def task_row(project_id: int, t: TaskSpec, **fields: Any) -> Task:
         pack_tokens=estimate_tokens(t.goal + " ".join(t.criteria)),
         **fields,
     )
+
+
+def key_of(t: Task) -> str:
+    return t.key or f"#{t.id}"
+
+
+def finished_tasks(project_id: int) -> list[Task]:
+    with session() as s:
+        return list(
+            s.exec(
+                select(Task)
+                .where(Task.project_id == project_id, Task.state == TaskState.DONE)
+                .order_by(col(Task.id))
+            ).all()
+        )
+
+
+# The tasks a new plan replaces when it is approved (going back to planning).
+UNFINISHED = (
+    TaskState.QUEUED,
+    TaskState.FAILED,
+    TaskState.PAUSED,
+    TaskState.STOPPED_BY_USER,
+    TaskState.BLOCKED,
+)
+
+
+def discard_unfinished(project_id: int, why: str) -> int:
+    """Discard the earlier plan's unfinished tasks and their open checkpoints."""
+    with session() as s:
+        tasks = s.exec(
+            select(Task).where(Task.project_id == project_id, col(Task.state).in_(UNFINISHED))
+        ).all()
+    n = 0
+    for t in tasks:
+        assert t.id is not None
+        for g in gates.pending(project_id, task_id=t.id):
+            assert g.id is not None
+            gates.cancel(g.id, why)
+        n += transition(t.id, (t.state,), TaskState.DISCARDED, why)
+    return n
 
 
 def replace_task(task: Task, specs: list[TaskSpec], origin: str) -> list[Task]:

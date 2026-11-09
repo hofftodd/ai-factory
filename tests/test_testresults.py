@@ -124,3 +124,25 @@ def test_test_paths_and_fences():
     changed = ["src/app.py", "tests/test_a.py"]
     assert roles.fence(p, roles.TESTER, changed) == ["src/app.py"]
     assert roles.fence(p, roles.BUILDER, changed) == ["tests/test_a.py"]
+
+
+def test_test_configuration_changes():
+    changed = roles.test_config_changed
+    assert changed("conftest.py", None, "collect_ignore = ['tests/test_old.py']\n")
+    assert changed("src/pytest.ini", "[pytest]\n", "[pytest]\naddopts = -k 'not old'\n")
+    assert not changed("conftest.py", "x = 1\n", "x = 1\n")
+    assert not changed("src/app.py", None, "print(1)\n")
+    # Shared files: only their test sections count.
+    toml = '[project]\nname = "app"\n\n[tool.pytest.ini_options]\naddopts = "-q"\n'
+    deps = toml.replace('name = "app"', 'name = "app"\ndependencies = ["rich"]')
+    assert not changed("pyproject.toml", toml, deps)
+    deselect = toml.replace('"-q"', '"-q --deselect tests/test_old.py"')
+    assert changed("pyproject.toml", toml, deselect)
+    assert changed("pyproject.toml", toml, toml + '\n[tool.coverage.run]\nomit = ["app/*"]\n')
+    cfg = "[metadata]\nname = a\n"
+    assert not changed("setup.cfg", cfg, cfg.replace("= a", "= b"))
+    assert changed("setup.cfg", cfg, cfg + "[tool:pytest]\naddopts = -x\n")
+    pkg = '{"scripts": {"test": "jest", "build": "tsc"}}'
+    assert not changed("package.json", pkg, pkg.replace('"tsc"', '"tsc -b"'))
+    ignore = pkg.replace('"jest"', '"jest --testPathIgnorePatterns old"')
+    assert changed("package.json", pkg, ignore)

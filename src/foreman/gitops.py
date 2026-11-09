@@ -109,6 +109,64 @@ def prepare_task_clone(project_id: int, task_id: int, milestone_branch: str) -> 
     return dest
 
 
+class MergeConflict(GitError):
+    def __init__(self, files: list[str]):
+        super().__init__(f"merge conflict in {', '.join(files) or 'unknown files'}")
+        self.files = files
+
+
+def sync_task_clone(project_id: int, task_id: int, milestone_branch: str) -> bool:
+    """Merge the milestone branch's latest work into a reused task clone, so the task
+    builds on what other tasks merged since it started and its own merge stays clean.
+
+    BASE_REF moves to the milestone commit, so the task's changes are still only its own.
+    Returns True if anything was merged. Raises MergeConflict (the clone is left as it
+    was) when the task's work conflicts with the milestone branch.
+    """
+    dest, repo = task_dir(project_id, task_id), repo_dir(project_id)
+    tip = git("rev-parse", milestone_branch, cwd=repo).strip()
+    if git("rev-parse", BASE_REF, cwd=dest).strip() == tip:
+        return False
+    git("fetch", "--quiet", str(repo), milestone_branch, cwd=dest)
+    merged = not is_ancestor(dest, tip)
+    if merged:
+        proc = subprocess.run(
+            [
+                "git",
+                *GIT_IDENTITY,
+                "merge",
+                "--autostash",
+                "-m",
+                f"Merge {milestone_branch} into task {task_id}",
+                tip,
+            ],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            files = _read("diff", "--name-only", "--diff-filter=U", cwd=dest).split()
+            git("merge", "--abort", cwd=dest, check=False)
+            raise MergeConflict(files)
+    git("update-ref", BASE_REF, tip, cwd=dest)
+    return merged
+
+
+def is_ancestor(path: Path, sha: str, ref: str = "HEAD") -> bool:
+    """Whether `sha` is already part of `ref`'s history (False if the clone lacks it)."""
+    cmd = ["git", *GIT_IDENTITY, "merge-base", "--is-ancestor", sha, ref]
+    return subprocess.run(cmd, cwd=path, capture_output=True).returncode == 0
+
+
+def behind(project_id: int, task_id: int, milestone_branch: str) -> bool:
+    """Whether the task clone lacks the milestone branch's latest commit."""
+    dest = task_dir(project_id, task_id)
+    if not (dest / ".git").exists():
+        return False
+    tip = git("rev-parse", milestone_branch, cwd=repo_dir(project_id)).strip()
+    return not is_ancestor(dest, tip)
+
+
 def reset_task_clone(project_id: int, task_id: int) -> None:
     import shutil
 
@@ -147,6 +205,13 @@ def has_commit(path: Path, sha: str) -> bool:
 def changed_since(path: Path, base: str) -> list[str]:
     """Files changed between `base` and HEAD."""
     return sorted(f for f in _read("diff", "--name-only", base, "HEAD", cwd=path).splitlines() if f)
+
+
+def file_at(path: Path, ref: str, rel: str) -> str | None:
+    """A file's content at `ref`, or None if it doesn't exist there."""
+    if _read("cat-file", "-t", f"{ref}:{rel}", cwd=path).strip() != "blob":
+        return None
+    return _read("show", f"{ref}:{rel}", cwd=path)
 
 
 def reset_to(path: Path, sha: str) -> None:
@@ -248,6 +313,12 @@ def push(project_id: int, repo_url: str, branch: str) -> None:
 
 def head_commit(project_id: int) -> str:
     return git("rev-parse", "HEAD", cwd=repo_dir(project_id)).strip()
+
+
+def file_changed_since(project_id: int, rel: str, sha: str) -> bool:
+    """Whether `rel` differs between `sha` and HEAD (True when `sha` is unknown)."""
+    repo = repo_dir(project_id)
+    return not has_commit(repo, sha) or rel in changed_since(repo, sha)
 
 
 def read_repo_file(project_id: int, rel: str) -> str:

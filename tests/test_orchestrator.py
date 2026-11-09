@@ -15,7 +15,7 @@ def _runs(task_id):
 
 
 async def test_task_runs_validates_and_merges(client, origin):
-    p = make_project(client, origin, test_cmd="test -f README.md")
+    p = make_project(client, origin)
     t = make_task(
         client,
         p["id"],
@@ -43,13 +43,6 @@ async def test_failed_validation_fails_task_and_does_not_merge(client, origin):
     tk = task(t["id"])
     assert tk.state == TaskState.FAILED and "validate failed" in tk.reason
     assert (gitops.repo_dir(p["id"]) / "src" / "app.py").read_text() == "VALUE = 1\n"
-
-
-async def test_project_test_regression_fails_task(client, origin):
-    p = make_project(client, origin, test_cmd="test -f README.md")
-    t = make_task(client, p["id"], script="rm README.md")
-    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
-    assert "tests failed" in task(t["id"]).reason
 
 
 async def test_scope_fence(client, origin):

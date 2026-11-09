@@ -9,6 +9,7 @@ const PHASE_LABEL: Record<Project["phase"], string> = {
   specify: "specifying",
   decomposing: "planning",
   plan_review: "plan review",
+  environment: "preparing environment",
   execute: "executing",
   done: "done",
 };
@@ -106,13 +107,13 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
     name: "",
     repo_url: "",
     milestone_branch: "foreman/m1",
-    test_cmd: "",
     executor_kind: "pi",
     node_id: "",
     model: "",
     planner_node_id: "",
     planner_model: "",
     push_after_merge: false,
+    test_note: "",
     skip_spec: false,
     repo_mode: "existing" as "existing" | "new",
     new_owner: "",
@@ -157,9 +158,9 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
             name: form.name,
             repo_url: repoUrl,
             milestone_branch: form.milestone_branch,
-            test_cmd: form.test_cmd,
             executor_kind: form.executor_kind,
             push_after_merge: form.push_after_merge,
+            test_note: form.test_note.trim(),
             skip_spec: form.skip_spec,
             role_bindings: {
               ...(form.node_id ? { executor: { node_id: Number(form.node_id), model: form.model } } : {}),
@@ -224,9 +225,6 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
         <Field label="Milestone branch" hint="Finished tasks merge here">
           <input value={form.milestone_branch} onChange={(e) => set("milestone_branch", e.target.value)} />
         </Field>
-        <Field label="Project test command" hint="Run after every task to catch regressions (optional)">
-          <input value={form.test_cmd} placeholder="e.g. pytest -q" onChange={(e) => set("test_cmd", e.target.value)} />
-        </Field>
         <Field label="Executor">
           <select value={form.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>
             {(sys?.executors ?? ["pi", "opencode", "shell"]).map((x) => (
@@ -273,6 +271,9 @@ function AddProject({ onDone }: { onDone: (p: Project) => void }) {
           <input type="checkbox" checked={form.skip_spec} onChange={(e) => set("skip_spec", e.target.checked)} />
         </Field>
       </div>
+      <Field label="How tests run here" hint="Optional. For a project whose tests already run a certain way, e.g. “make test; CI runs pytest -n auto”. The Environment Agent installs what it needs and the Tester makes tests/run.sh wrap it.">
+        <textarea rows={2} maxLength={2000} value={form.test_note} placeholder="e.g. make test (pytest); CI runs pytest -n auto" onChange={(e) => set("test_note", e.target.value)} />
+      </Field>
       <ErrorNote error={error} />
       <button className="btn primary" disabled={!!busy || (creating && (!gh?.configured || !owner))}>
         {busy || (creating ? "Create repository and add project" : "Add project")}

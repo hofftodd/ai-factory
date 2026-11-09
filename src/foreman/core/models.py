@@ -45,6 +45,7 @@ class ProjectPhase(StrEnum):
     SPECIFY = "specify"  # interactive spec / plan / validation with the planner
     DECOMPOSING = "decomposing"  # planner is breaking the plan into tasks
     PLAN_REVIEW = "plan_review"  # proposed tasks wait for approval
+    ENVIRONMENT = "environment"  # the Environment Agent prepares the toolchain image
     EXECUTE = "execute"  # tasks run autonomously
     DONE = "done"  # every task done and the acceptance command passes
 
@@ -54,6 +55,7 @@ class JobKind(StrEnum):
     DECOMPOSE = "decompose"
     SPLIT = "split"  # break a failing task into smaller ones
     REVIEW = "review"  # replan after a task completes or acceptance fails
+    ENVIRONMENT = "environment"  # write and check the project's toolchain image
 
 
 class GateKind(StrEnum):
@@ -98,8 +100,13 @@ class Project(SQLModel, table=True):
     repo_url: str
     default_branch: str = "main"
     milestone_branch: str = "foreman/m1"
-    # Project-wide test command run after every task (regression guard). Optional.
+    # Unused: the suite is the Tester's tests/run.sh. Kept because older databases have
+    # this column as NOT NULL without a default.
     test_cmd: str = ""
+    # How this project's tests already run, in the user's words (e.g. "make test; CI runs
+    # pytest -n auto"). Not a command Foreman runs: the Environment Agent installs what it
+    # needs and the Tester makes tests/run.sh a thin wrapper around it.
+    test_note: str = ""
     executor_kind: str = "pi"
     # Executor network: "isolated" (only the model gateway is reachable) or "open"
     # (LAN and internet, for tests that need them). See foreman.sandbox. Older rows
@@ -129,6 +136,8 @@ class Project(SQLModel, table=True):
     acceptance_cmd: str = ""
     spec_approved_at: float | None = None
     spec_commit: str = ""
+    # Commit of the Environment Agent's last checked toolchain (.foreman/); "" = none.
+    env_commit: str = ""
     # Task size limits enforced at decomposition (FR-3.3).
     max_task_files: int = 3
     context_budget_pct: int = 35

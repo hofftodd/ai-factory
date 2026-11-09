@@ -1,6 +1,6 @@
 """The agents and what each one may do.
 
-Foreman runs four kinds of agent, each with a fixed list of capabilities. The
+Foreman runs five kinds of agent, each with a fixed list of capabilities. The
 orchestrator (plain code, no model) is the only component that writes to the
 repositories and the database, and it checks every agent action against this
 registry before carrying it out. Anything outside an agent's list is refused and
@@ -15,16 +15,24 @@ are checked again on the result before anything is merged.
 from __future__ import annotations
 
 import fnmatch
+import json
+import tomllib
 from dataclasses import dataclass
 from typing import Any
 
-from foreman.core.models import Node, Project
+from foreman.core.models import Node, Project, Task
 
 PROJECT_PLANNER = "project_planner"
 TASK_PLANNER = "task_planner"
 TESTER = "tester"
 BUILDER = "builder"
+ENVIRONMENT = "environment"
 ESCALATION = "escalation"
+
+# The toolchain image's directory: only the Environment Agent writes it.
+ENV_DIR = ".foreman"
+# The acceptance tests: run on their own (tests/acceptance/run.sh), never by tests/run.sh.
+ACCEPTANCE_DIR = "tests/acceptance"
 
 # Planning documents, by key: human-readable markdown in specs/<feature>/.
 DOCS = {
@@ -74,12 +82,24 @@ ROLES: dict[str, Role] = {
         ("write documents, code or tests", "name files or commands"),
         (TASK_PLANNER, "planner"),
     ),
+    ENVIRONMENT: Role(
+        ENVIRONMENT,
+        "Environment Agent",
+        "Prepares the toolchain image every Tester and Builder works in, once the plan is "
+        "approved.",
+        (
+            "read the planning documents and the task list",
+            "write the toolchain Dockerfile and its check script (.foreman/)",
+        ),
+        ("write code, tests or documents",),
+        (ENVIRONMENT, TASK_PLANNER, "planner"),
+    ),
     TESTER: Role(
         TESTER,
         "Tester Agent",
         "Writes the tests for each task, and the acceptance tests, and runs them.",
         ("write and change files under the project's test paths", "run commands and tests"),
-        ("change any file outside the test paths",),
+        ("change any file outside the test paths", "change the toolchain image (.foreman/)"),
         (TESTER, "executor"),
     ),
     BUILDER: Role(
@@ -87,16 +107,20 @@ ROLES: dict[str, Role] = {
         "Builder Agent",
         "Writes the code that makes each task's tests pass.",
         (
-            "write and change code, docs and the toolchain Dockerfile",
+            "write and change code and docs",
             "run commands, including the tests",
         ),
-        ("change any test",),
+        (
+            "change any test",
+            "change the test configuration (except in the setup task)",
+            "change the toolchain image (.foreman/)",
+        ),
         (BUILDER, "executor"),
     ),
 }
 
 # Every binding key a project may set (the dashboard shows these).
-BINDING_KEYS = (PROJECT_PLANNER, TASK_PLANNER, TESTER, BUILDER, ESCALATION)
+BINDING_KEYS = (PROJECT_PLANNER, TASK_PLANNER, ENVIRONMENT, TESTER, BUILDER, ESCALATION)
 
 
 def binding(project: Project, role: str) -> dict[str, Any]:
@@ -108,6 +132,17 @@ def binding(project: Project, role: str) -> dict[str, Any]:
         if b.get("node_id") is not None:
             return dict(b)
     return {}
+
+
+def reasoning_effort(project: Project, task: Task, role: str) -> str:
+    """The reasoning effort a coding agent's requests ask for ("" = the model's default).
+    An escalated task runs on the escalation binding's node and model, so it uses that
+    binding's setting; a node or model set on the task by hand gets the default."""
+    b = binding(project, role)
+    if task.node_id is not None or task.model:
+        esc = binding(project, ESCALATION)
+        b = esc if (esc.get("node_id"), esc.get("model")) == (task.node_id, task.model) else {}
+    return str(b.get("reasoning_effort") or "")
 
 
 def node_and_model(project: Project, role: str) -> tuple[Node | None, str]:
@@ -166,13 +201,85 @@ def is_test_path(project: Project, rel: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in TEST_FILE_PATTERNS)
 
 
+def is_env_path(rel: str) -> bool:
+    return rel == ENV_DIR or rel.startswith(ENV_DIR + "/")
+
+
 def fence(project: Project, role: str, changed: list[str]) -> list[str]:
     """Files this role changed that it may not touch (empty = within its capabilities)."""
     if role == TESTER:
-        return [f for f in changed if not is_test_path(project, f)]
+        return [f for f in changed if not is_test_path(project, f) or is_env_path(f)]
     if role == BUILDER:
-        return [f for f in changed if is_test_path(project, f)]
+        return [f for f in changed if is_test_path(project, f) or is_env_path(f)]
     return []
+
+
+# Files that only configure how tests run...
+TEST_CONFIG_FILES = (
+    "conftest.py",
+    "pytest.ini",
+    ".coveragerc",
+    ".rspec",
+    ".mocharc.*",
+    ".nycrc*",
+    "jest.config.*",
+    "vitest.config.*",
+    "karma.conf.*",
+    "phpunit.xml*",
+)
+# ...and the test sections of files that configure other things too.
+TEST_CONFIG_SECTIONS = {
+    "pyproject.toml": ("tool.pytest", "tool.coverage"),
+    "setup.cfg": ("tool:pytest", "coverage:"),
+    "tox.ini": ("pytest", "coverage:"),
+    "package.json": ("jest", "mocha", "nyc", "c8", "vitest", "scripts.test"),
+}
+
+
+def is_test_config(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1]
+    return name in TEST_CONFIG_SECTIONS or any(fnmatch.fnmatch(name, p) for p in TEST_CONFIG_FILES)
+
+
+def test_config_changed(rel: str, before: str | None, after: str | None) -> bool:
+    """Whether a change to `rel` changes how tests run (None = the file is absent). The
+    Builder may not: skipping or deselecting a test it can't edit would get past the fence."""
+    name = rel.rsplit("/", 1)[-1]
+    keys = TEST_CONFIG_SECTIONS.get(name)
+    if keys is None:
+        return is_test_config(rel) and before != after
+    return _test_sections(name, before, keys) != _test_sections(name, after, keys)
+
+
+def _test_sections(name: str, text: str | None, keys: tuple[str, ...]) -> dict[str, Any]:
+    if not text:
+        return {}
+    if name.endswith((".toml", ".json")):
+        try:
+            data = tomllib.loads(text) if name.endswith(".toml") else json.loads(text)
+        except ValueError:  # unparseable: any change counts
+            return {"": text}
+        return {k: _dig(data, k.split(".")) for k in keys}
+    # INI: the lines of each section a key names (a trailing ":" matches a prefix).
+    out: dict[str, Any] = {}
+    section = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            name_ = line[1:-1].strip()
+            hit = any(name_ == k or (k.endswith(":") and name_.startswith(k)) for k in keys)
+            section = name_ if hit else None
+        elif section and line and not line.startswith(("#", ";")):
+            out.setdefault(section, []).append(line)
+    return out
+
+
+def _dig(data: Any, path: list[str]) -> Any:
+    for key in path:
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
 
 
 def denied(project_id: int, task_id: int | None, role: str, what: str, **data: Any) -> None:

@@ -352,6 +352,16 @@ export default function TaskPage() {
               >
                 Retry from scratch
               </ActionButton>
+              <ActionButton
+                onClick={async () => {
+                  const note = prompt("Send back to the Tester. What should it change in the tests?");
+                  if (note === null) return;
+                  await post(`/api/tasks/${id}/send-back`, { note });
+                  reload();
+                }}
+              >
+                Send back to Tester
+              </ActionButton>
             </>
           )}
           {t.state !== "done" && t.state !== "discarded" && !active && (

@@ -134,8 +134,8 @@ def parse_chat(project: Project, text: str) -> ChatOutput:
     return out
 
 
-# What `.foreman/Dockerfile` builds on (docker/executor-base/Dockerfile). The Builder
-# writes that file in the setup task; this tells it what is already there.
+# What `.foreman/Dockerfile` builds on (docker/executor-base/Dockerfile). The
+# Environment Agent writes that file; this tells it what is already there.
 BASE_IMAGE = (
     "`foreman/executor-base` is Ubuntu 24.04 with git, curl, bash and the coding agent, and "
     "no language runtimes (no Node, no Python): the Dockerfile must install what the project "
@@ -227,8 +227,10 @@ CODE_FIELDS = ("allowed_files", "files", "context_files", "validation_cmd", "com
 
 STANDARD_TASKS_NOTE = (
     "Foreman adds three standard tasks itself; do not include them: project setup "
-    "(toolchain, skeleton, test runner, first README and ARCHITECTURE), the acceptance tests, "
-    "and bringing the documentation up to date at the end."
+    "(skeleton, test runner, first README and ARCHITECTURE), the acceptance tests "
+    "(kept apart from the test suite every task must pass), "
+    "and bringing the documentation up to date at the end. The toolchain (language, "
+    "test and build tools) is prepared separately, before any task runs."
 )
 
 TASK_RULES = [
@@ -260,8 +262,23 @@ def _docs_section(project: Project, docs: dict[str, str]) -> list[str]:
     return out
 
 
-def decompose_system_prompt(project: Project, docs: dict[str, str]) -> str:
-    """The Task Planning Agent breaks the approved documents into tasks."""
+def decompose_system_prompt(
+    project: Project, docs: dict[str, str], done: list[dict[str, Any]] | None = None
+) -> str:
+    """The Task Planning Agent breaks the approved documents into tasks. `done` are the
+    finished tasks of an earlier plan (going back to planning): only the rest is planned."""
+    replan: list[str] = []
+    if done:
+        replan = [
+            "",
+            "The project is partly built: the tasks under 'Already done' are finished and "
+            "their work is in the repository. Plan only the work that remains to make the "
+            "documents true; do not repeat or redo finished work. Use keys that are not "
+            "already taken; finished tasks need not appear in deps.",
+            "",
+            "## Already done",
+            json.dumps(done, indent=2),
+        ]
     return "\n".join(
         [
             "You are the Task Planning Agent. Read the approved planning documents and break "
@@ -274,6 +291,7 @@ def decompose_system_prompt(project: Project, docs: dict[str, str]) -> str:
             "",
             "Output ONLY a JSON array, no prose, like:",
             TASK_EXAMPLE,
+            *replan,
             *_docs_section(project, docs),
         ]
     )
@@ -347,9 +365,13 @@ class TaskSpec:
     kind: str = "feature"  # setup | acceptance | feature | docs
 
 
-def parse_tasks(text: str) -> list[TaskSpec]:
-    """Parse and validate the Task Planner's task list (raises PlanError)."""
-    return parse_task_items(extract_json_array(text))
+def parse_tasks(text: str, done: tuple[str, ...] = ()) -> list[TaskSpec]:
+    """Parse and validate the Task Planner's task list (raises PlanError). `done` are keys
+    of finished tasks: reserved, and dropped from deps (they are already satisfied)."""
+    tasks = parse_task_items(extract_json_array(text), known=done)
+    for t in tasks:
+        t.deps = [d for d in t.deps if d not in done]
+    return tasks
 
 
 def parse_task_items(items: list[Any], known: tuple[str, ...] = ()) -> list[TaskSpec]:
@@ -415,43 +437,85 @@ def parse_task_items(items: list[Any], known: tuple[str, ...] = ()) -> list[Task
 # -- standard tasks -------------------------------------------------------------
 
 SETUP, ACCEPTANCE, DOCS = "SETUP", "ACCEPT", "DOCS"
+ACCEPTANCE_CRITERIA = [
+    "Every acceptance criterion is checked by at least one acceptance test",
+    "tests/acceptance/run.sh runs the acceptance tests, and tests/run.sh leaves them out",
+]
 STANDARD_KEYS = (SETUP, ACCEPTANCE, DOCS)
 
 
-def standard_tasks(features: list[TaskSpec]) -> list[TaskSpec]:
+def standard_tasks(
+    features: list[TaskSpec], done: dict[str, str] | None = None, acceptance_changed: bool = True
+) -> list[TaskSpec]:
     """The plan as it runs: setup first, the acceptance tests, the Task Planner's tasks,
-    and the documentation last."""
-    setup = TaskSpec(
-        key=SETUP,
-        title="Project setup",
-        goal="Prepare the project so every later task can be built and tested: the "
-        "toolchain, the project skeleton, the test runner, and a first README.md and "
-        "ARCHITECTURE.md based on the design.",
-        req_refs=[],
-        criteria=[
-            "The test runner runs the whole test suite and reports results and coverage",
-            "README.md explains what the project is, how to run it and how to test it",
-            "ARCHITECTURE.md explains how the project is organised, following the design",
-        ],
-        deps=[],
-        kind="setup",
-    )
-    acceptance = TaskSpec(
-        key=ACCEPTANCE,
-        title="Acceptance tests",
-        goal="Turn the acceptance criteria into executable acceptance tests: the "
-        "project's definition of done. They fail until the work is finished.",
-        req_refs=[],
-        criteria=["Every acceptance criterion is checked by at least one acceptance test"],
-        deps=[SETUP],
-        kind="acceptance",
-    )
+    and the documentation last.
+
+    On a re-plan, `done` maps the finished tasks' keys to their kinds: a finished setup is
+    not repeated, and finished acceptance tests only when the criteria changed. Standard
+    keys a finished task already has get a suffix (ACCEPT-2)."""
+    done = done or {}
+    kinds = set(done.values())
+
+    def key(base: str) -> str:
+        n = 2
+        name = base
+        while name in done:
+            name, n = f"{base}-{n}", n + 1
+        return name
+
+    out: list[TaskSpec] = []
+    after_setup: list[str] = []
+    if "setup" not in kinds:
+        setup = TaskSpec(
+            key=key(SETUP),
+            title="Project setup",
+            goal="Prepare the project so every later task can be built and tested: the "
+            "project skeleton, the test runner, and a first README.md and ARCHITECTURE.md "
+            "based on the design.",
+            req_refs=[],
+            criteria=[
+                "The test runner (tests/run.sh) runs the whole test suite except the "
+                "acceptance tests in tests/acceptance/, and reports results and coverage",
+                "README.md explains what the project is, how to run it and how to test it",
+                "ARCHITECTURE.md explains how the project is organised, following the design",
+            ],
+            deps=[],
+            kind="setup",
+        )
+        out.append(setup)
+        after_setup = [setup.key]
+    if "acceptance" not in kinds:
+        out.append(
+            TaskSpec(
+                key=key(ACCEPTANCE),
+                title="Acceptance tests",
+                goal="Turn the acceptance criteria into executable acceptance tests: the "
+                "project's definition of done. They fail until the work is finished.",
+                req_refs=[],
+                criteria=list(ACCEPTANCE_CRITERIA),
+                deps=after_setup,
+                kind="acceptance",
+            )
+        )
+    elif acceptance_changed:
+        out.append(
+            TaskSpec(
+                key=key(ACCEPTANCE),
+                title="Update the acceptance tests",
+                goal="Bring the acceptance tests in line with the changed acceptance "
+                "criteria: the project's definition of done.",
+                req_refs=[],
+                criteria=list(ACCEPTANCE_CRITERIA),
+                deps=after_setup,
+                kind="acceptance",
+            )
+        )
     planned = [
-        TaskSpec(**{**t.__dict__, "deps": t.deps or [SETUP]})  # everything after setup
+        TaskSpec(**{**t.__dict__, "deps": t.deps or after_setup})  # everything after setup
         for t in features
     ]
     docs = TaskSpec(
-        key=DOCS,
+        key=key(DOCS),
         title="Documentation",
         goal="Bring README.md and ARCHITECTURE.md up to date with what was built.",
         req_refs=[],
@@ -460,10 +524,10 @@ def standard_tasks(features: list[TaskSpec]) -> list[TaskSpec]:
             "its run and test instructions work",
             "ARCHITECTURE.md describes how the finished project is organised",
         ],
-        deps=[ACCEPTANCE, *[t.key for t in planned]],
+        deps=[*[t.key for t in out if t.kind == "acceptance"], *[t.key for t in planned]],
         kind="docs",
     )
-    return [setup, acceptance, *planned, docs]
+    return [*out, *planned, docs]
 
 
 def find_cycle(graph: dict[str, list[str]]) -> list[str]:

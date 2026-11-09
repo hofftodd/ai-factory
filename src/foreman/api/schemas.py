@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 class RoleBinding(BaseModel):
     node_id: int | None = None
     model: str = ""
+    # Coding agents only (Tester, Builder, escalation): passed to the model's chat template
+    # as `reasoning_effort` (e.g. low, medium, high, xhigh); "" leaves the model's default.
+    reasoning_effort: str = Field(default="", pattern=r"^[a-z]{0,16}$")
 
 
 class ProjectCreate(BaseModel):
@@ -19,7 +22,6 @@ class ProjectCreate(BaseModel):
     feature: str = Field(default="001-initial", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     # Skip Phase 1 and go straight to manually added tasks.
     skip_spec: bool = False
-    test_cmd: str = ""
     executor_kind: str = "pi"
     network: Literal["isolated", "open"] = "isolated"
     role_bindings: dict[str, RoleBinding] = Field(default_factory=dict)
@@ -28,6 +30,8 @@ class ProjectCreate(BaseModel):
     watchdog: dict[str, Any] = Field(default_factory=dict)
     spend_cap_usd: float = Field(default=0.0, ge=0)
     min_task_coverage: int = Field(default=80, ge=0, le=100)
+    # How the project's tests already run (see Project.test_note).
+    test_note: str = Field(default="", max_length=2000)
 
 
 class ProjectUpdate(BaseModel):
@@ -35,7 +39,6 @@ class ProjectUpdate(BaseModel):
     acceptance_cmd: str | None = None
     max_task_files: int | None = Field(default=None, ge=1, le=20)
     context_budget_pct: int | None = Field(default=None, ge=5, le=90)
-    test_cmd: str | None = None
     executor_kind: str | None = None
     network: Literal["isolated", "open"] | None = None
     role_bindings: dict[str, RoleBinding] | None = None
@@ -45,6 +48,7 @@ class ProjectUpdate(BaseModel):
     spend_cap_usd: float | None = Field(default=None, ge=0)
     min_task_coverage: int | None = Field(default=None, ge=0, le=100)
     test_paths: list[str] | None = None
+    test_note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskCreate(BaseModel):
@@ -125,8 +129,17 @@ class RetryRequest(BaseModel):
     reset: bool = False  # discard the task clone and start from the milestone tip
 
 
+class SendBackRequest(BaseModel):
+    note: str = ""  # what the Tester should change; shown in its briefing
+
+
 class DocUpdate(BaseModel):
     content: str
+
+
+class EnvironmentRebuild(BaseModel):
+    # What's missing or should change, for the Environment Agent (optional).
+    note: str = ""
 
 
 class ChatMessage(BaseModel):

@@ -11,7 +11,7 @@ const LLM = process.env.FAKE_LLM_URL!;
 test.use({ viewport: { width: 1280, height: 800 } });
 
 test("specify, review the plan, execute", async ({ page, request }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const node = await (await request.post("/api/nodes", { data: { name: "demo-planner", base_url: LLM } })).json();
   const repo = `${dirname(ORIGIN)}/greeter.git`;
   rmSync(repo, { recursive: true, force: true });
@@ -62,9 +62,11 @@ test("specify, review the plan, execute", async ({ page, request }) => {
   await expect(page.locator(".proposed").last()).toContainText("Documentation");
   if (process.env.SHOTS_DIR) await page.screenshot({ path: `${process.env.SHOTS_DIR}/plan-review.png` });
 
-  // Approve the plan -> tasks run.
+  // Approve the plan -> the Environment Agent prepares the toolchain image (docker
+  // runtime only; the local runtime goes straight on) -> tasks run.
   await page.getByRole("button", { name: /Approve plan/ }).click();
-  await expect(page.locator(".step.current")).toHaveText(/Execute|Done/);
+  await expect(page.locator(".step.current")).toHaveText(/Environment|Execute|Done/);
+  await expect(page.locator(".step.current")).toHaveText(/Execute|Done/, { timeout: 120_000 });
   await expect(page.locator(".column").nth(3)).toContainText("Command-line entry point", { timeout: 60_000 });
   await expect(page.locator(".column").nth(3).locator(".task-card")).toHaveCount(5, { timeout: 60_000 });
 });

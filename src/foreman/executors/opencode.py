@@ -44,7 +44,14 @@ def opencode_config(endpoint: str, model: str, provider: str = "openai") -> dict
         "autoupdate": False,
         "share": "disabled",
         # Unattended run inside a sandbox: allow edits and shell, nothing from the web.
-        "permission": {"edit": "allow", "bash": "allow", "webfetch": "deny"},
+        # "ask" auto-rejects in `run` mode and ends the run, so paths outside the
+        # workspace (/foreman, /foreman-results) are allowed; the container is the fence.
+        "permission": {
+            "edit": "allow",
+            "bash": "allow",
+            "webfetch": "deny",
+            "external_directory": "allow",
+        },
     }
 
 

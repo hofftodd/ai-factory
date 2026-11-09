@@ -25,6 +25,7 @@ from foreman.config import get_settings
 from foreman.core import gates, roles, watchdog
 from foreman.core.contextpack import build_pack, build_role_pack
 from foreman.core.models import (
+    Event,
     GateKind,
     Node,
     Project,
@@ -42,10 +43,13 @@ from foreman.db import session
 from foreman.executors import EXIT_CONFIG, Executor, ExecutorContext, OutputParser, get_executor
 from foreman.executors.shell import role_scripts
 from foreman.gateway import new_token
+from foreman.orchestrator.gate_actions import send_back_to_tester
 from foreman.sandbox import Proc, Runtime, StepSpec, get_runtime, kill_handle
 
 SUITE_RUNNER = "tests/run.sh"
-ACCEPTANCE_RUNNER = "tests/acceptance/run.sh"
+ACCEPTANCE_RUNNER = f"{roles.ACCEPTANCE_DIR}/run.sh"
+# The Builder writes this into $FOREMAN_RESULTS when tests contradict each other.
+CONFLICT_REPORT = "tests-conflict.md"
 LOG_FLUSH_S = 0.25
 LOG_BATCH = 50
 
@@ -167,6 +171,7 @@ class TaskRunner:
         self.gateway_port = gateway_port
         self._tail: list[str] = []
         self.image = ""  # set once the attempt's toolchain image is ready
+        self.acceptance_in_suite = 0  # acceptance test cases the last suite run included
         self.settings = get_settings()
         self.run_dir = self.settings.runs_dir / str(run_id)
         with session() as s:
@@ -415,6 +420,7 @@ class TaskRunner:
         clone = await asyncio.to_thread(
             gitops.prepare_task_clone, task.project_id, self.task_id, project.milestone_branch
         )
+        await self._sync(task, project, clone)
         self._check()
         # Fail fast on a broken Dockerfile, before any model or gateway work.
         self.image = await self._toolchain_image(task.project_id, clone)
@@ -426,6 +432,24 @@ class TaskRunner:
             await self._pipeline(task, project, clone, executor)
         else:
             await self._single_step(task, project, clone, executor)
+
+    async def _sync(self, task: Task, project: Project, clone: Path) -> None:
+        """Start every attempt from the milestone branch's latest work (other tasks may
+        have merged since the clone was made), so the task's merge doesn't conflict."""
+        try:
+            merged = await asyncio.to_thread(
+                gitops.sync_task_clone, task.project_id, self.task_id, project.milestone_branch
+            )
+        except gitops.MergeConflict as e:
+            raise StepFailed(
+                f"the task's work conflicts with {project.milestone_branch} "
+                f"in {', '.join(e.files) or 'some files'}",
+                kind="conflict",
+            ) from e
+        if merged:
+            self._emit("system", f"brought in the latest {project.milestone_branch}")
+            if task.tests_ready:  # the Builder's diff starts after the merge
+                self._update_task(tests_commit=gitops.head(clone))
 
     async def _agent_setup(
         self, project: Project, task: Task, role: str, executor: Executor
@@ -520,18 +544,18 @@ class TaskRunner:
         # Validation
         if not transition(self.task_id, (TaskState.RUNNING,), TaskState.VALIDATING):
             raise Stopped("not running")
-        checks = [("validate", task.validation_cmd), ("tests", project.test_cmd)]
-        for name, cmd in checks:
-            if not cmd:
-                continue
+        cmd = task.validation_cmd
+        if cmd:
             self._check()
-            self._emit("test", f"$ {cmd}", step=name)
-            code = await self._step(name, ["bash", "-lc", cmd], {}, "test", task.timeout_s)
+            self._emit("test", f"$ {cmd}", step="validate")
+            code = await self._step("validate", ["bash", "-lc", cmd], {}, "test", task.timeout_s)
             if code != 0:
                 raise StepFailed(
-                    f"{name} failed (exit {code}): {cmd}", "\n".join(self._tail), kind="validation"
+                    f"validate failed (exit {code}): {cmd}",
+                    "\n".join(self._tail),
+                    kind="validation",
                 )
-            self._emit("test", f"{name} passed", step=name, passed=True)
+            self._emit("test", "validate passed", step="validate", passed=True)
         await self._merge_or_gate(project)
 
     def _check_diff_size(
@@ -682,7 +706,7 @@ class TaskRunner:
         node, model, endpoint = await self._agent_setup(project, task, role, executor)
         start = gitops.head(clone)
         test_paths = [d.strip("/") for d in (project.test_paths or ["tests"]) if d.strip("/")]
-        from foreman.planner import BASE_IMAGE, doc_path
+        from foreman.planner import doc_path
 
         pack = await asyncio.to_thread(
             build_role_pack,
@@ -693,9 +717,10 @@ class TaskRunner:
             docs={k: doc_path(project, k) for k in roles.PLANNING_DOCS},
             test_paths=test_paths,
             task_tests=task_tests,
-            base_image=BASE_IMAGE,
             context_window=node.context_window if node else None,
             previous_failure=self._previous_failure(),
+            sent_back=self._sent_back(project, clone) if role == roles.TESTER else "",
+            failing_acceptance=self._failing_acceptance(task),
         )
         if pack.over_budget and executor.needs_node:
             raise StepFailed(
@@ -720,7 +745,7 @@ class TaskRunner:
         if role == roles.TESTER:
             mounts |= {"workspace_readonly": True, "writable_dirs": test_paths}
         else:
-            mounts |= {"readonly_dirs": test_paths}
+            mounts |= {"readonly_dirs": [*test_paths, roles.ENV_DIR]}
         code = await self._step(
             role, inv.command, inv.env, "log", task.timeout_s, output=inv.output, **mounts
         )
@@ -730,9 +755,26 @@ class TaskRunner:
         )
         changed = gitops.changed_since(clone, start)
         outside = roles.fence(project, role, changed)
+        if role == roles.BUILDER and task.kind != "setup":
+            outside += [
+                f
+                for f in changed
+                if f not in outside
+                and roles.is_test_config(f)
+                and roles.test_config_changed(
+                    f, gitops.file_at(clone, start, f), gitops.file_at(clone, "HEAD", f)
+                )
+            ]
         if outside:
             await asyncio.to_thread(gitops.reset_to, clone, start)
-            what = "change tests" if role == roles.BUILDER else "change non-test files"
+            if any(roles.is_env_path(f) for f in outside):
+                what = "change the toolchain image (.foreman/)"
+            elif role == roles.TESTER:
+                what = "change non-test files"
+            elif any(roles.is_test_path(project, f) for f in outside):
+                what = "change tests"
+            else:
+                what = "change the test configuration"
             roles.denied(task.project_id, self.task_id, role, what, files=outside)
             raise WatchdogTrip(
                 f"the {who} changed files it may not touch: {', '.join(outside)}", kind="fence"
@@ -754,10 +796,29 @@ class TaskRunner:
             raise StepFailed("the Tester added no tests for this task", kind="no_tests")
         if task.kind == "acceptance" and not (clone / ACCEPTANCE_RUNNER).is_file():
             raise StepFailed(f"the Tester did not write {ACCEPTANCE_RUNNER}", kind="no_tests")
-        if not self._suite_cmd(project, clone):
+        if not self._suite_cmd(clone):
             raise StepFailed(f"there is no test runner: {SUITE_RUNNER} is missing", kind="no_tests")
         # Record the new tests' first results: they are expected to fail for now.
-        await self._run_suite(project, clone, "tester", changed, base="")
+        result = await self._run_suite(project, clone, "tester", changed, base="")
+        if result is not None and self._needs_red(task) and not self._task_failures(result[0]):
+            raise StepFailed(
+                "none of this task's new tests fail: they already pass against the current "
+                "code, so they don't test what this task must change. Write tests that fail "
+                "until the task is built"
+                + (
+                    ", against the calls the failing acceptance tests make"
+                    if self._failing_acceptance(task)
+                    else ""
+                ),
+                kind="no_red",
+            )
+        if task.kind == "acceptance" and self.acceptance_in_suite:
+            raise StepFailed(
+                f"{SUITE_RUNNER} also runs the acceptance tests: it must leave "
+                f"{roles.ACCEPTANCE_DIR}/ out (they run through {ACCEPTANCE_RUNNER} and fail "
+                "until the project is done)",
+                kind="validation",
+            )
         self._update_task(tests_ready=True, tests_commit=gitops.head(clone))
 
     async def _builder(self, project: Project, clone: Path, executor: Executor) -> None:
@@ -765,6 +826,9 @@ class TaskRunner:
         task_tests = gitops.changed_since(clone, gitops.BASE_REF)
         task_tests = [f for f in task_tests if roles.is_test_path(project, f)]
         changed = await self._agent(roles.BUILDER, project, clone, executor, task_tests)
+        report = self.run_dir / "results" / f"{roles.BUILDER}-agent" / CONFLICT_REPORT
+        if report.is_file() and report.read_text(errors="replace").strip():
+            self._tests_conflict(report.read_text(errors="replace").strip())
         self._check_diff_size(project, clone, changed, base=task.tests_commit or gitops.BASE_REF)
         if task.hold:
             transition(self.task_id, (TaskState.RUNNING,), TaskState.PAUSED, "paused after build")
@@ -798,9 +862,7 @@ class TaskRunner:
         path.mkdir(parents=True)
         return path
 
-    def _suite_cmd(self, project: Project, clone: Path) -> str:
-        if project.test_cmd:
-            return project.test_cmd
+    def _suite_cmd(self, clone: Path) -> str:
         return f"sh {SUITE_RUNNER}" if (clone / SUITE_RUNNER).is_file() else ""
 
     async def _run_suite(
@@ -808,7 +870,7 @@ class TaskRunner:
     ) -> tuple[TestRun, int] | None:
         """Run the whole suite, store its results and coverage. `base` is where the Builder's
         changes start (for changed-line coverage); "" for none."""
-        cmd = self._suite_cmd(project, clone)
+        cmd = self._suite_cmd(clone)
         if not cmd:
             return None
         task = self._check()
@@ -824,6 +886,14 @@ class TaskRunner:
         )
         await asyncio.to_thread(gitops.clean_tree, clone)
         res = await asyncio.to_thread(testresults.collect, results_dir, clone)
+        # The acceptance tests fail until the project is done: they never count for a task.
+        # (tests/run.sh should leave them out; older projects' runners may not.)
+        acceptance = [c for c in res.cases if testresults.in_dir(c, roles.ACCEPTANCE_DIR)]
+        self.acceptance_in_suite = len(acceptance)
+        if acceptance and task.kind != "acceptance":
+            res.cases = [c for c in res.cases if not testresults.in_dir(c, roles.ACCEPTANCE_DIR)]
+            if code != 0 and not res.count("failed") and not res.count("error"):
+                code = 0  # only acceptance tests failed
         changed_cov, changed_lines = None, 0
         if base and res.lines:
             code_files = [
@@ -847,6 +917,8 @@ class TaskRunner:
             summary += f", {run.coverage:.0f}% coverage"
         if changed_cov is not None:
             summary += f", {changed_cov:.0f}% of changed lines"
+        if acceptance and task.kind != "acceptance":
+            summary += f"; {len(acceptance)} acceptance tests not counted"
         if res.problem:
             summary += f" ({res.problem})"
         self._emit("test", f"tests ({step}): {summary}", step=f"tests-{step}", test_run=run.id)
@@ -854,8 +926,11 @@ class TaskRunner:
 
     async def _coverage_ok(self, project: Project) -> bool:
         """Changed-line coverage against the project minimum. Below it the task goes back to
-        the Tester once, then waits for the user."""
+        the Tester once, then waits for the user. Setup only reports it: its code is a
+        skeleton that later tasks fill in and test."""
         task = self._check()
+        if task.kind == "setup":
+            return True
         with session() as s:
             run = s.exec(
                 select(TestRun)
@@ -900,6 +975,143 @@ class TaskRunner:
         if prev and prev.state in (RunState.FAILED, RunState.STOPPED) and prev.reason:
             return prev.reason
         return ""
+
+    def _tests_conflict(self, report: str) -> None:
+        """The Builder reports tests that contradict each other: the task goes back to the
+        Tester with the report. A second report in a row fails the attempt instead, so the
+        two agents can't hand it back and forth."""
+        with session() as s:
+            backs = s.exec(
+                select(Event)
+                .where(Event.task_id == self.task_id, Event.kind == "sent_back")
+                .order_by(col(Event.id).desc())
+            ).all()
+        if backs and backs[0].data.get("source") == roles.BUILDER:
+            raise StepFailed(
+                f"the Builder Agent says the tests contradict each other: {report[:500]}",
+                kind="tests_conflict",
+            )
+        self._set_run(failure_kind="tests_conflict")
+        why = "tests contradict each other; back to the Tester"
+        finish_run(self.run_id, RunState.SUCCEEDED, why)
+        send_back_to_tester(self.task_id, (TaskState.RUNNING,), report[:4000], source=roles.BUILDER)
+        raise Stopped("sent back to the Tester")
+
+    def _needs_red(self, task: Task) -> bool:
+        """A feature or docs task's first tests must fail: if they already pass, they test
+        something that is already there. (Not once a Builder has worked on it: tests added
+        after that, e.g. for coverage, pass from the start.)"""
+        if task.kind in ("setup", "acceptance"):
+            return False
+        with session() as s:
+            built = s.exec(
+                select(TaskRun).where(
+                    TaskRun.task_id == self.task_id, TaskRun.step == roles.BUILDER
+                )
+            ).first()
+        return built is None
+
+    def _task_failures(self, run: TestRun) -> int:
+        with session() as s:
+            return len(
+                s.exec(
+                    select(TestCase).where(
+                        TestCase.test_run_id == run.id,
+                        col(TestCase.task_test),
+                        col(TestCase.status).in_(("failed", "error")),
+                    )
+                ).all()
+            )
+
+    def _failing_acceptance(self, task: Task, limit: int = 25) -> list[str]:
+        """The failing acceptance tests a repair task was added for: those of the last
+        acceptance run before it was added (by the replanner or by hand). Tasks added
+        before any acceptance run have none."""
+        if task.kind == "acceptance":
+            return []
+        with session() as s:
+            run = s.exec(
+                select(TestRun)
+                .where(
+                    TestRun.project_id == task.project_id,
+                    TestRun.step == "acceptance",
+                    TestRun.created_at <= task.created_at,
+                )
+                .order_by(col(TestRun.id).desc())
+            ).first()
+            if run is None or not (run.failed or run.errors):
+                return []
+            cases = s.exec(
+                select(TestCase)
+                .where(
+                    TestCase.test_run_id == run.id,
+                    col(TestCase.status).in_(("failed", "error")),
+                )
+                .order_by(col(TestCase.id))
+            ).all()
+        out = []
+        for c in cases[:limit]:
+            where = c.file or c.classname
+            message = " ".join(c.message.split())[:300]
+            out.append(f"`{where}::{c.name}`" + (f": {message}" if message else ""))
+        if len(cases) > limit:
+            out.append(f"... and {len(cases) - limit} more")
+        return out
+
+    def _sent_back(self, project: Project, clone: Path) -> str:
+        """Why the task's tests came back to the Tester: the Builder's code is under-tested
+        (with the files that need it most), and the note it was sent back with (the user's,
+        or the Builder's report of contradicting tests)."""
+        with session() as s:
+            suite = s.exec(
+                select(TestRun)
+                .where(TestRun.task_id == self.task_id)
+                .order_by(col(TestRun.id).desc())
+            ).first()
+            built = s.exec(
+                select(TaskRun)
+                .where(TaskRun.task_id == self.task_id, TaskRun.step == roles.BUILDER)
+                .order_by(col(TaskRun.id).desc())
+            ).first()
+            back = s.exec(
+                select(Event)
+                .where(Event.task_id == self.task_id, Event.kind == "sent_back")
+                .order_by(col(Event.id).desc())
+            ).first()
+        lines: list[str] = []
+        minimum = project.min_task_coverage
+        cov = suite.changed_coverage if suite and suite.step == "builder" else None
+        if suite and cov is not None and minimum > 0 and cov < minimum:
+            lines += [
+                f"The Builder's code passes the tests, but they run only {cov:.0f}% of the "
+                f"lines this task changed (minimum {minimum}%). Add tests that exercise the "
+                "code below, including its error paths; the code itself is in the workspace.",
+                "",
+            ]
+            code = {
+                f
+                for f in gitops.changed_since(clone, gitops.BASE_REF)
+                if not roles.is_test_path(project, f)
+            }
+            thin = sorted(
+                (c["covered"] / c["total"], f, c)
+                for f, c in suite.files.items()
+                if f in code and c.get("total") and c["covered"] < c["total"]
+            )
+            lines += [
+                f"- `{f}`: {c['covered']} of {c['total']} lines run by the tests"
+                for _, f, c in thin[:15]
+            ]
+        if back and back.message and built and back.ts >= built.started_at:
+            if back.data.get("source") == roles.BUILDER:
+                lines += [
+                    "The Builder Agent found tests that contradict each other, so the suite "
+                    "can never pass. Fix or remove the test that is wrong. Its report:",
+                ]
+            else:
+                lines += ["", "The user's note:"]
+            lines.append(back.message.strip())
+        return "\n".join(lines).strip()
 
 
 def merge_task(task_id: int) -> None:

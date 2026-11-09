@@ -37,14 +37,17 @@ CHECK = "grep -q 'fake model' hello.txt\n"
 
 def agent_write(req: dict[str, Any]) -> tuple[str, str]:
     """What the fake coding agent writes: the Tester a check for its task (or the
-    acceptance runner), the Builder (or a lone executor) hello.txt."""
+    acceptance runner), the Builder (or a lone executor) hello.txt. The standard setup
+    and docs tasks use their own file, so every task's new check fails until it is built."""
     text = json.dumps(req.get("messages", []))
+    m = re.search(r"# Task ([\w.-]+):", text)
+    key = m.group(1) if m else "task"
+    path = f"{key.lower()}.txt" if key in ("SETUP", "DOCS") else FILE_PATH
     if "You are the Tester Agent" in text:
         if "This task: acceptance tests" in text:
             return "tests/acceptance/run.sh", CHECK
-        m = re.search(r"# Task ([\w.-]+):", text)
-        return f"tests/check_{(m.group(1) if m else 'task').lower()}.sh", CHECK
-    return FILE_PATH, FILE_CONTENT
+        return f"tests/check_{key.lower()}.sh", f"grep -q 'fake model' {path}\n"
+    return path, FILE_CONTENT
 
 
 CHUNK = 24
@@ -473,8 +476,17 @@ DEMO_TASKS = [
 ]
 
 
+DEMO_ENVIRONMENT = (
+    "<<<FILE .foreman/Dockerfile\nFROM foreman/executor-base\n>>>\n"
+    "<<<FILE .foreman/check.sh\n#!/bin/sh\nset -e\ncommand -v sh\ncommand -v git\n>>>\n"
+    "The base image already has everything this greeter needs."
+)
+
+
 def demo_planner(req: dict[str, Any]) -> str:
     """A scripted planner for demos and browser tests (greeter project)."""
+    if "You are the Environment Agent" in system_text(req):
+        return DEMO_ENVIRONMENT
     if "break the project into small, ordered tasks" in system_text(req):
         return "```json\n" + json.dumps(DEMO_TASKS, indent=2) + "\n```"
     turns = sum(1 for m in req.get("messages", []) if m.get("role") == "user")

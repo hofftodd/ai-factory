@@ -36,7 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from foreman.core import spend, watchdog
+from foreman.core import roles, spend, watchdog
 from foreman.core.contextpack import estimate_tokens
 from foreman.core.models import Node, Project, RunState, Task, TaskRun, TaskState
 from foreman.core.state import ACTIVE_STATES, emit, stop_requested
@@ -241,6 +241,11 @@ class Gateway:
         if claude:
             _normalize_claude(payload)
             return await self._claude(info, upstream, headers, payload, prompt_estimate)
+        effort = roles.reasoning_effort(info.project, info.task, info.run.step or roles.BUILDER)
+        if effort:
+            # How llama.cpp, vLLM and SGLang pass options to the model's chat template.
+            kwargs = payload.setdefault("chat_template_kwargs", {})
+            kwargs.setdefault("reasoning_effort", effort)
         if payload.get("stream"):
             payload.setdefault("stream_options", {})["include_usage"] = True
             return await self._stream(info, upstream, headers, payload, prompt_estimate)

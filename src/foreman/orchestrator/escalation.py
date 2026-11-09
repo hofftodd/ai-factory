@@ -5,7 +5,8 @@
       -> the escalation model         (role binding "escalation"; up to max_retries)
       -> blocked: an inbox item lets the user retry or discard
 
-A configuration problem blocks immediately. A context pack that is too big
+A configuration problem, or work that conflicts with the milestone branch, blocks
+immediately: retrying can't fix either. A context pack that is too big
 goes straight to splitting. The same failure signature `repeat_limit` times in
 a row ends the retries at the current level early.
 """
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 
 from sqlmodel import col, select
 
+from foreman import gitops
 from foreman.core import gates, roles, watchdog
 from foreman.core.models import (
     GateKind,
@@ -33,6 +35,8 @@ from foreman.db import session
 
 LEVEL_RETRY, LEVEL_SPLIT, LEVEL_ESCALATED = 0, 1, 2
 MAX_SPLIT_DEPTH = 2
+# The standard tasks: their instructions depend on their kind, which split pieces lose.
+UNSPLITTABLE_KINDS = ("setup", "acceptance", "docs")
 
 
 @dataclass
@@ -74,12 +78,15 @@ def decide(project: Project, task: Task, run: TaskRun) -> Decision:
     can_split = (
         watchdog.limit(project, "split")
         and task.escalation_level < LEVEL_SPLIT
+        and task.kind not in UNSPLITTABLE_KINDS
         and split_depth(task) < MAX_SPLIT_DEPTH
         and bool(roles.binding(project, roles.TASK_PLANNER))
     )
 
     if run.failure_kind == "config":
         return Decision("block", f"configuration problem: {run.reason}")
+    if run.failure_kind == "conflict":
+        return Decision("block", "its work conflicts with tasks merged since it started")
     if run.failure_kind == "too_big" and can_split:
         return Decision("split", "the task does not fit the executor's context")
 
@@ -160,17 +167,26 @@ def apply(project: Project, task: Task, run: TaskRun, d: Decision) -> None:
             f"escalated to {binding.get('model') or 'the escalation model'}: {d.reason}",
         )
     else:
-        block(task, f"{d.reason}. Last failure: {run.reason}")
+        conflict = run.failure_kind == "conflict"
+        block(task, f"{d.reason}. Last failure: {run.reason}", conflict=conflict)
 
 
-def block(task: Task, why: str) -> None:
+def block(task: Task, why: str, conflict: bool = False) -> None:
     assert task.id is not None
+    then = "Approve to try again (fresh attempts), or reject to discard the task."
+    if conflict:
+        then = (
+            "Approve to start the task over from the milestone branch (its work so far is "
+            "thrown away), or reject to discard the task. To keep its work, first merge the "
+            f"milestone branch into its copy ({gitops.task_dir(task.project_id, task.id)}) "
+            "and resolve the conflict there; approving then carries on from it."
+        )
     if transition(task.id, (TaskState.FAILED,), TaskState.BLOCKED, why):
         gates.open_gate(
             task.project_id,
             GateKind.ESCALATION,
             f"Task {task.key or task.id} is stuck: {task.title}",
-            f"{why}\n\nApprove to try again (fresh attempts), or reject to discard the task.",
+            f"{why}\n\n{then}",
             task_id=task.id,
         )
 
@@ -200,6 +216,20 @@ def resolve_blocked(task_id: int, approve: bool) -> None:
                 task.level_failures = 0
                 s.add(task)
                 s.commit()
+                project = s.get(Project, task.project_id)
+                last = s.exec(
+                    select(TaskRun)
+                    .where(TaskRun.task_id == task_id, TaskRun.state == RunState.FAILED)
+                    .order_by(col(TaskRun.id).desc())
+                ).first()
+                if (
+                    project is not None
+                    and last is not None
+                    and last.failure_kind == "conflict"
+                    and gitops.behind(task.project_id, task_id, project.milestone_branch)
+                ):
+                    # Still conflicting: start over on the milestone branch.
+                    gitops.reset_task_clone(task.project_id, task_id)
         transition(task_id, (TaskState.BLOCKED,), TaskState.QUEUED, "retry requested by user")
     else:
         transition(task_id, (TaskState.BLOCKED,), TaskState.DISCARDED, "discarded by user")
