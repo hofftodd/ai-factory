@@ -311,6 +311,50 @@ def push(project_id: int, repo_url: str, branch: str) -> None:
     git("push", "--quiet", "origin", branch, cwd=repo_dir(project_id), auth_url=repo_url)
 
 
+def sync_from_origin(project_id: int, repo_url: str, branch: str) -> tuple[str, str]:
+    """Merge commits pushed to the repository's `branch` (its default branch) since the
+    clone into the milestone branch, so files added on GitHub reach the planners.
+
+    Returns (done, problem): what was merged, or why nothing was ("" when there was
+    nothing new). A conflict is aborted, leaving the milestone branch as it was.
+    """
+    repo = repo_dir(project_id)
+    proc = subprocess.run(
+        ["git", *GIT_IDENTITY, *_auth_args(repo_url), "fetch", "--quiet", "origin", branch],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr.strip()
+        if "couldn't find remote ref" in err:
+            return "", ""  # nothing pushed to that branch yet
+        return "", f"could not fetch origin/{branch}: {err[:300]}"
+    remote = f"origin/{branch}"
+    if is_ancestor(repo, remote):
+        return "", ""
+    if _read("status", "--porcelain", cwd=repo).strip():
+        return "", f"origin/{branch} has new commits, but the clone has uncommitted changes"
+    count = _read("rev-list", "--count", f"HEAD..{remote}", cwd=repo).strip() or "?"
+    try:
+        # Unrelated histories happen when the repository was empty at clone time and
+        # ai-factory made its own root commit; that root commit is empty, so merging is safe.
+        git(
+            "merge",
+            "--no-edit",
+            "--allow-unrelated-histories",
+            "-m",
+            f"Merge {count} new commit(s) from {remote}",
+            remote,
+            cwd=repo,
+        )
+    except GitError as e:
+        git("merge", "--abort", cwd=repo, check=False)
+        return "", f"merging {remote} failed, so it was left out: {str(e)[-300:]}"
+    plural = "" if count == "1" else "s"
+    return f"merged {count} new commit{plural} from {remote}", ""
+
+
 def head_commit(project_id: int) -> str:
     return git("rev-parse", "HEAD", cwd=repo_dir(project_id)).strip()
 

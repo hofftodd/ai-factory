@@ -497,7 +497,18 @@ from a diagram by the project owner; the mermaid version is in
   OpenAI-compatible models via `web_search` / `web_fetch` function tools that
   ai-factory runs (`research.py`: SearXNG at `AI_FACTORY_SEARCH_URL`; fetch refuses
   private, loopback and link-local addresses and doesn't follow redirects).
-  Without a search service local models get no tools.
+  Without a search service local models get no web tools, and the prompt says
+  so (`planner.tools_note`). Both planners read the repository (chat,
+  breakdown, split; not the per-task review) through read-only client tools
+  run by ai-factory (`repotools.py`: `list_files`, `read_file`, `search_repo`;
+  confined to the main clone, `.git` hidden, output capped), on Claude and
+  OpenAI-compatible models. Tool rounds are capped (`MAX_TOOL_ROUNDS`) and on
+  local nodes bounded by the context window (each round's `max_tokens` is
+  what is left; under `ANSWER_RESERVE_TOKENS` the model must answer without
+  tools). Before each chat turn `gitops.sync_from_origin` merges new commits
+  on the default branch into the milestone branch (unrelated histories
+  allowed for an origin that was empty at clone time; conflicts aborted and
+  reported as a system event).
 - **Task Planner**: plain-language tasks `{key, title, goal, req_refs,
   criteria (≤ 6), deps, size}`; file and command fields are refused
   (`parse_task_items`, `replan.validate_ops`). `standard_tasks()` frames every
@@ -552,5 +563,8 @@ from a diagram by the project owner; the mermaid version is in
 | Result parsing and changed-line coverage | ✅ `tests/test_testresults.py` |
 | Old bindings map to the new roles | ✅ `test_role_bindings_fall_back_for_older_projects` |
 | Web research (local and Claude), private addresses refused | ✅ `tests/test_research.py` |
+| Repository tools (confinement, paging, both providers, round limits) | ✅ `tests/test_repotools.py` |
+| Files pushed to GitHub reach the planner | ✅ `test_sync_from_origin_*`, `test_planner_reads_files_pushed_after_the_project_was_created` |
+| Deleting a planned project | ✅ `test_delete_project_with_history`, `test_delete_project_refuses_while_planning` |
 | Real agents (pi, OpenCode), idea to done | ✅ `test_spec_to_done_with_agent[pi]`, `[opencode]` (Docker) |
 | Browser flow | ✅ `web/e2e/spec.spec.ts` (documents → five tasks → done) |

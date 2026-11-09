@@ -65,6 +65,7 @@ ROLES: dict[str, Role] = {
         (
             "write the requirements, design and acceptance criteria (markdown)",
             "talk with the user",
+            "read the repository's files (read-only)",
             "research topics on the web (search and read public pages)",
         ),
         ("write code, tests or commands", "create or change tasks"),
@@ -76,6 +77,7 @@ ROLES: dict[str, Role] = {
         "Reads the planning documents and manages the task list.",
         (
             "read the planning documents",
+            "read the repository's files when planning tasks (read-only)",
             "create, split, change and remove tasks (plain language)",
             "propose a change to the planning documents (you decide)",
         ),

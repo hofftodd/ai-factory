@@ -75,3 +75,53 @@ def test_token_never_in_git_config(origin, monkeypatch):
     gitops.clone_project(1, str(origin), "ai-factory/m1")
     cfg = (gitops.repo_dir(1) / ".git" / "config").read_text()
     assert "secret" not in cfg and "extraheader" not in cfg
+
+
+def _push_to_origin(origin, tmp_path, name, files):
+    """Commit files to origin's main from a fresh clone, as someone using GitHub would."""
+    work = tmp_path / name
+    git("clone", "-q", str(origin), str(work), cwd=tmp_path)
+    for rel, content in files.items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(content)
+    git("add", "-A", cwd=work)
+    git("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", name, cwd=work)
+    git("push", "-q", "origin", "HEAD:main", cwd=work)
+
+
+def test_sync_from_origin_merges_new_commits(origin, tmp_path):
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    repo = gitops.repo_dir(1)
+    assert gitops.sync_from_origin(1, str(origin), "main") == ("", "")
+    gitops.write_and_commit(1, {"specs/001/requirements.md": "# R\n"}, "spec: draft")
+    _push_to_origin(origin, tmp_path, "add-schema", {"schema/batchml.json": "{}\n"})
+    done, problem = gitops.sync_from_origin(1, str(origin), "main")
+    assert (done, problem) == ("merged 1 new commit from origin/main", "")
+    assert git("branch", "--show-current", cwd=repo).strip() == "ai-factory/m1"
+    assert (repo / "schema" / "batchml.json").exists()
+    assert (repo / "specs" / "001" / "requirements.md").exists()
+    assert gitops.sync_from_origin(1, str(origin), "main") == ("", "")
+
+
+def test_sync_from_origin_backs_out_of_a_conflict(origin, tmp_path):
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    repo = gitops.repo_dir(1)
+    gitops.write_and_commit(1, {"README.md": "# ours\n"}, "spec: readme")
+    before = gitops.head_commit(1)
+    _push_to_origin(origin, tmp_path, "theirs", {"README.md": "# theirs\n"})
+    done, problem = gitops.sync_from_origin(1, str(origin), "main")
+    assert done == "" and "merging origin/main failed" in problem
+    assert gitops.head_commit(1) == before
+    assert git("status", "--porcelain", cwd=repo).strip() == ""
+    assert (repo / "README.md").read_text() == "# ours\n"
+
+
+def test_sync_from_an_origin_that_was_empty_at_clone(tmp_path):
+    bare = tmp_path / "empty.git"
+    git("init", "-q", "--bare", "-b", "main", str(bare), cwd=tmp_path)
+    gitops.clone_project(1, str(bare), "ai-factory/m1")  # ai-factory makes its own root
+    assert gitops.sync_from_origin(1, str(bare), "main") == ("", "")  # nothing pushed yet
+    _push_to_origin(bare, tmp_path, "first", {"schema/a.json": "{}\n"})
+    done, _ = gitops.sync_from_origin(1, str(bare), "main")
+    assert done == "merged 1 new commit from origin/main"
+    assert (gitops.repo_dir(1) / "schema" / "a.json").exists()

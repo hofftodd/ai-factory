@@ -12,7 +12,13 @@ separate delta field; it goes to ``on_reasoning`` and never into the reply text.
 With ``research=True`` (the Project Planning Agent only) the model can search and
 read the web: Claude through Anthropic's server-side web search/fetch tools, local
 models through ai-factory's own tools (research.py) when a search service is set.
-Each search or fetch is reported to ``on_research``.
+With ``repo`` set (both planners) it can also read the project's repository through
+ai-factory's read-only repository tools (repotools.py), on either provider. Each
+search, fetch or read is reported to ``on_research``.
+
+Tool rounds are bounded: on a local node each round's output budget is what the
+context window still has room for, and once the window is nearly full, or the
+rounds run out, the model is asked to answer with what it has, without tools.
 
 Calls stream, and ``should_abort`` is polled while tokens arrive: when it
 returns true the stream is closed (which stops generation on the server) and
@@ -22,15 +28,18 @@ call (FR-8.2).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import anthropic
 import httpx
 
+from ai_factory import repotools
 from ai_factory import research as web
 from ai_factory.core.contextpack import estimate_tokens
 from ai_factory.core.models import Node
@@ -60,6 +69,10 @@ CLAUDE_RESEARCH_TOOLS = [
     {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
 ]
 MAX_CONTINUATIONS = 5  # resumes of a paused server-tool turn
+MAX_TOOL_ROUNDS = 16  # client tool rounds (web on local models, repository) per reply
+# Once a local node's window has less than this left, tools stop and the model answers.
+ANSWER_RESERVE_TOKENS = 8192
+ANSWER_NOW = "Stop using tools now and give your answer with what you have found so far."
 
 ABORT_POLL_S = 0.5
 
@@ -131,11 +144,12 @@ async def stream_chat(
     should_abort: AbortCheck | None = None,
     research: bool = False,
     on_research: ResearchCallback | None = None,
+    repo: Path | None = None,
 ) -> ChatResult:
     """Run one chat completion, streaming text to ``on_text``.
 
     ``messages`` alternate user/assistant with plain-text content. ``max_tokens``
-    defaults to `output_budget`.
+    defaults to `output_budget`. ``repo`` is the project clone the model may read.
     """
     gate = _AbortGate(should_abort)
     gate(force=True)
@@ -143,7 +157,7 @@ async def stream_chat(
         max_tokens = output_budget(node, system, messages)
     if node.provider == "anthropic":
         result = await _anthropic(
-            node, model, system, messages, max_tokens, on_text, gate, research, on_research
+            node, model, system, messages, max_tokens, on_text, gate, research, on_research, repo
         )
     elif node.provider == "openai":
         result = await _openai(
@@ -157,11 +171,43 @@ async def stream_chat(
             gate,
             research and web.available(),
             on_research,
+            repo,
         )
     else:
         raise LLMError(f"unknown provider {node.provider!r}")
     result.max_tokens = max_tokens
     return result
+
+
+def tools_offered(node: Node, research: bool, repo: bool) -> dict[str, bool]:
+    """Which tool families a planner call gets, so its prompt can say so truthfully."""
+    web_on = research and (node.provider == "anthropic" or web.available())
+    return {"web": web_on, "repo": repo}
+
+
+def _convo_tokens(convo: list[dict[str, Any]]) -> int:
+    total = 0
+    for m in convo:
+        content = m.get("content")
+        total += estimate_tokens(content if isinstance(content, str) else json.dumps(content))
+        if m.get("tool_calls"):
+            total += estimate_tokens(json.dumps(m["tool_calls"]))
+    return total
+
+
+async def _run_client_tool(repo: Path | None, name: str, args: dict[str, Any]) -> str:
+    if name in repotools.NAMES:
+        if repo is None:
+            return f"{name} is not available"
+        return await asyncio.to_thread(repotools.run_tool, repo, name, args)
+    return await web.run_tool(name, args)
+
+
+def _describe(name: str, args: dict[str, Any]) -> str:
+    if name in repotools.NAMES:
+        return repotools.describe(name, args)
+    what = args.get("query") or args.get("url") or ""
+    return f"{'searched' if name == 'web_search' else 'read'}: {what}"
 
 
 def output_budget(node: Node, system: str, messages: list[dict[str, str]]) -> int:
@@ -183,21 +229,30 @@ async def _openai(
     gate: _AbortGate,
     research: bool = False,
     on_research: ResearchCallback | None = None,
+    repo: Path | None = None,
 ) -> ChatResult:
     convo: list[dict[str, Any]] = [{"role": "system", "content": system}, *messages]
+    functions = (web.TOOLS if research else []) + (repotools.TOOLS if repo is not None else [])
     total = ChatResult(text="")
-    for _ in range(web.MAX_ROUNDS if research else 1):
+    rounds = MAX_TOOL_ROUNDS if functions else 1
+    for i in range(rounds):
+        room = node.context_window - int(_convo_tokens(convo) * PROMPT_HEADROOM)
+        last = i == rounds - 1 or room < ANSWER_RESERVE_TOKENS + MIN_OUTPUT_TOKENS
+        offered = [] if (last and i > 0) else functions
+        if offered is not functions and functions:
+            convo.append({"role": "user", "content": ANSWER_NOW})
+        budget = min(max_tokens, max(MIN_OUTPUT_TOKENS, room))
         result, calls = await _openai_round(
-            node, model, convo, max_tokens, on_text, on_reasoning, gate, research
+            node, model, convo, budget, on_text, on_reasoning, gate, offered
         )
         total.text += result.text
         total.stop_reason = result.stop_reason
         total.input_tokens += result.input_tokens
         total.output_tokens += result.output_tokens
         total.reasoning_chars += result.reasoning_chars
-        if not calls:
+        if not calls or not offered:
             return total
-        # Run the research tools and hand the results back for the next round.
+        # Run the tools and hand the results back for the next round.
         convo.append({"role": "assistant", "content": result.text or None, "tool_calls": calls})
         for call in calls:
             fn = call["function"]
@@ -205,10 +260,11 @@ async def _openai(
                 args = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
+            if not isinstance(args, dict):
+                args = {}
             if on_research:
-                what = args.get("query") or args.get("url") or ""
-                on_research(f"{'searched' if fn['name'] == 'web_search' else 'read'}: {what}")
-            output = await web.run_tool(fn["name"], args)
+                on_research(_describe(fn["name"], args))
+            output = await _run_client_tool(repo, fn["name"], args)
             convo.append({"role": "tool", "tool_call_id": call["id"], "content": output})
     return total
 
@@ -221,7 +277,7 @@ async def _openai_round(
     on_text: TextCallback | None,
     on_reasoning: TextCallback | None,
     gate: _AbortGate,
-    research: bool,
+    tools: list[dict[str, Any]],
 ) -> tuple[ChatResult, list[dict[str, Any]]]:
     """One streamed completion; returns the result and any tool calls it made."""
     headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
@@ -232,8 +288,8 @@ async def _openai_round(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if research:
-        body["tools"] = web.TOOLS
+    if tools:
+        body["tools"] = tools
     parts: list[str] = []
     calls: dict[int, dict[str, Any]] = {}
     result = ChatResult(text="")
@@ -304,6 +360,7 @@ async def _anthropic(
     gate: _AbortGate,
     research: bool = False,
     on_research: ResearchCallback | None = None,
+    repo: Path | None = None,
 ) -> ChatResult:
     client = anthropic.AsyncAnthropic(
         api_key=node.api_key or None,
@@ -318,8 +375,11 @@ async def _anthropic(
         "messages": convo,
         "thinking": {"type": "adaptive"},
     }
-    if research:
-        params["tools"] = CLAUDE_RESEARCH_TOOLS
+    tools = (CLAUDE_RESEARCH_TOOLS if research else []) + (
+        repotools.CLAUDE_TOOLS if repo is not None else []
+    )
+    if tools:
+        params["tools"] = tools
     if model in _EFFORT_MODELS:
         params["output_config"] = {"effort": PLANNER_EFFORT}
     if model in _FALLBACK_MODELS:
@@ -328,7 +388,8 @@ async def _anthropic(
         params["betas"] = [_FALLBACK_BETA]
     total = ChatResult(text="")
     try:
-        for _ in range(MAX_CONTINUATIONS + 1):
+        tool_rounds = 0
+        for _ in range(MAX_CONTINUATIONS + MAX_TOOL_ROUNDS + 1):
             async with client.beta.messages.stream(**params) as stream:
                 async for text in stream.text_stream:
                     gate()
@@ -340,12 +401,33 @@ async def _anthropic(
             for block in message.content:
                 if block.type == "server_tool_use" and on_research:
                     args = block.input if isinstance(block.input, dict) else {}
-                    what = args.get("query") or args.get("url") or ""
-                    on_research(f"{'searched' if block.name == 'web_search' else 'read'}: {what}")
+                    on_research(_describe(block.name, args))
             total.text += "".join(b.text for b in message.content if b.type == "text")
             total.stop_reason = message.stop_reason or ""
             total.input_tokens += message.usage.input_tokens
             total.output_tokens += message.usage.output_tokens
+            if message.stop_reason == "tool_use":
+                # Client tools (the repository): run them and send back the results.
+                tool_rounds += 1
+                results: list[dict[str, Any]] = []
+                for block in message.content:
+                    if block.type != "tool_use":
+                        continue
+                    args = block.input if isinstance(block.input, dict) else {}
+                    if on_research:
+                        on_research(_describe(block.name, args))
+                    output = await _run_client_tool(repo, block.name, args)
+                    results.append(
+                        {"type": "tool_result", "tool_use_id": block.id, "content": output}
+                    )
+                convo.append(
+                    {"role": "assistant", "content": [b.to_dict() for b in message.content]}
+                )
+                if tool_rounds >= MAX_TOOL_ROUNDS:
+                    results.append({"type": "text", "text": ANSWER_NOW})
+                    params["tool_choice"] = {"type": "none"}
+                convo.append({"role": "user", "content": results})
+                continue
             if message.stop_reason != "pause_turn":
                 break
             # A long server-side research turn paused: send it back to resume (no extra

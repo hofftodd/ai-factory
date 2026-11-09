@@ -38,7 +38,7 @@ from ai_factory.core.models import (
 )
 from ai_factory.core.state import emit, stop_requested, transition
 from ai_factory.db import session
-from ai_factory.llm import Aborted, LLMError, stream_chat
+from ai_factory.llm import Aborted, LLMError, stream_chat, tools_offered
 from ai_factory.planner import (
     DOC_NAMES,
     PlanError,
@@ -209,6 +209,7 @@ class JobRunner:
         system: str,
         messages: list[dict[str, str]],
         research: bool = False,
+        repo: bool = False,
     ) -> str:
         await self._wait_for_budget(node)
         result = await stream_chat(
@@ -221,6 +222,7 @@ class JobRunner:
             should_abort=self.should_abort,
             research=research,
             on_research=self._on_research,
+            repo=gitops.repo_dir(self.project_id) if repo else None,
         )
         self._flush()
         self._record_usage(result.input_tokens, result.output_tokens)
@@ -325,9 +327,18 @@ class JobRunner:
 
     async def _chat(self, node: Node, model: str) -> None:
         project = self.project()
+        # Files pushed to the repository since it was cloned (a schema, a reference doc,
+        # documents edited on GitHub) join the milestone branch before the planner reads.
+        done, problem = await asyncio.to_thread(
+            gitops.sync_from_origin, self.project_id, project.repo_url, project.default_branch
+        )
+        if done or problem:
+            emit(self.project_id, None, "system", done or problem, job_id=self.job_id)
         docs = read_docs(project)
         tree = repo_files(gitops.repo_dir(self.project_id))
-        system = chat_system_prompt(project, docs, tree)
+        system = chat_system_prompt(
+            project, docs, tree, tools_offered(node, research=True, repo=True)
+        )
         with session() as s:
             history = s.exec(
                 select(SpecMessage)
@@ -341,7 +352,7 @@ class JobRunner:
             raise JobFailed("nothing to answer")
 
         # Only the Project Planning Agent may research on the web (core/roles.py).
-        text = await self._call(node, model, system, messages, research=True)
+        text = await self._call(node, model, system, messages, research=True, repo=True)
         out = parse_chat(project, text)
         if not finish_job(self.job_id, (JobState.RUNNING,), JobState.DONE):
             return  # stopped while we were finishing: apply nothing
@@ -386,7 +397,7 @@ class JobRunner:
         messages = [{"role": "user", "content": first_message}]
         last_error = ""
         for attempt in range(1, MAX_DECOMPOSE_ATTEMPTS + 1):
-            text = await self._call(node, model, system, messages)
+            text = await self._call(node, model, system, messages, repo=True)
             try:
                 return parse_tasks(text, done)
             except PlanError as e:
@@ -413,7 +424,9 @@ class JobRunner:
             {"key": key_of(t), "title": t.title, "goal": t.description, "criteria": t.criteria}
             for t in done
         ]
-        system = decompose_system_prompt(project, read_docs(project), summaries)
+        system = decompose_system_prompt(
+            project, read_docs(project), summaries, tools_offered(node, research=False, repo=True)
+        )
         specs = await self._plan_loop(
             node,
             model,
@@ -521,7 +534,13 @@ class JobRunner:
             "deps": [],
             "size": "medium",
         }
-        system = split_system_prompt(project, read_docs(project), original, failures)
+        system = split_system_prompt(
+            project,
+            read_docs(project),
+            original,
+            failures,
+            tools_offered(node, research=False, repo=True),
+        )
         specs = await self._plan_loop(node, model, system, "Split the task now.", "task split")
         if not finish_job(self.job_id, (JobState.RUNNING,), JobState.DONE):
             return

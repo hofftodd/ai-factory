@@ -29,14 +29,15 @@ the agents working through the tasks. More in [Screenshots](#screenshots).*
 
 | Agent | Does | Can't |
 |---|---|---|
-| **Project Planning Agent** | Talks with you; writes the requirements, design and acceptance criteria as human-readable markdown; researches unfamiliar topics on the web | Write code, tests, commands or tasks |
-| **Task Planning Agent** | Reads the documents; breaks the work into plain-language tasks (goal, "done when" criteria, dependencies, size); reviews the plan after each task | Write documents, code or tests; name files or commands |
+| **Project Planning Agent** | Talks with you; reads the repository; writes the requirements, design and acceptance criteria as human-readable markdown; researches unfamiliar topics on the web | Write code, tests, commands or tasks |
+| **Task Planning Agent** | Reads the documents and the repository; breaks the work into plain-language tasks (goal, "done when" criteria, dependencies, size); reviews the plan after each task | Write documents, code or tests; name files or commands |
 | **Environment Agent** | Once the plan is approved, writes the toolchain image (`.ai-factory/Dockerfile`) and a check script proving every tool the project needs is installed; ai-factory builds and checks it before any task runs | Write code, tests or documents |
 | **Tester Agent** | Writes each task's tests before the code exists, the acceptance tests, and the test runner; runs tests | Change anything outside the test folders |
 | **Builder Agent** | Writes the code (plus `README.md` and `ARCHITECTURE.md`) until the tests pass; runs the tests | Change any test or the toolchain image |
 
-The orchestrator (plain code, no model) enforces this: planners have no tools
-and only their allowed actions are read from their replies; the Tester and
+The orchestrator (plain code, no model) enforces this: planners can only read
+(the repository, and the web for the Project Planner) and only their allowed
+actions are read from their replies; the Tester and
 Builder each see the other's files read-only in their container, and every
 change is checked afterwards. Anything refused is logged as a *denied* event.
 Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -47,8 +48,11 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
    Claude) about what you want to build. It writes `requirements.md` (ids
    like `FR-1.1`), `design.md` (components and how they interact, in prose)
    and `acceptance-criteria.md`, committing them to your repo under
-   `specs/<feature>/`. It thinks in plain language, not code, and searches
-   the web when it needs to. You can edit any document directly.
+   `specs/<feature>/`. It thinks in plain language, not code, reads the
+   repository (existing code, docs, a schema or reference material you
+   add) and searches the web when it needs to. You can edit any document
+   directly, and anything you push to the repository's default branch is
+   merged into the milestone branch before the planner's next turn.
 2. **Approve the documents.** This checkpoint is always on.
 3. **Breakdown.** The Task Planning Agent splits the work into
    plain-language tasks: a goal, the requirements covered, up to six "done
