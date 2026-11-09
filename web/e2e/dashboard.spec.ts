@@ -31,7 +31,7 @@ test("task runs to done and shows log + diff", async ({ page, request }) => {
   await page.goto("/");
   await expect(page.locator("main").getByText("e2e-happy")).toBeVisible();
   await page.locator("main").getByText("e2e-happy").click();
-  await expect(page.getByRole("heading", { name: /e2e-happy/ })).toBeVisible();
+  await expect(page.locator("main").getByRole("heading", { name: /e2e-happy/ })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/project-running.png`, fullPage: true });
 
   await page.goto(`/tasks/${t.id}`);
