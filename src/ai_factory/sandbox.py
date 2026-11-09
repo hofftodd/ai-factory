@@ -67,18 +67,56 @@ class StepSpec:
     results_dir: Path | None = None
 
 
+# Output is read in chunks, so a line of any length is fine. A coding agent's JSON
+# events can carry whole files on one line (StreamReader.readline stops at 64 KiB and
+# raised, failing the step); past this much a line is cut, keeping memory bounded.
+READ_CHUNK = 64 * 1024
+MAX_LINE_BYTES = 4 * 1024 * 1024
+
+
+def cut_note(dropped: int) -> str:
+    return f" ...[ai-factory: line cut, {dropped} more bytes]"
+
+
 class Proc:
     def __init__(self, handle: str, proc: asyncio.subprocess.Process):
         self.handle = handle
         self._proc = proc
 
     async def lines(self) -> AsyncIterator[str]:
+        """Each line of the process's output, without its newline, however long."""
         assert self._proc.stdout is not None
+        buf = bytearray()
+        dropped = 0  # bytes of the current line past MAX_LINE_BYTES
+
+        def take(part: bytes) -> None:
+            nonlocal dropped
+            room = MAX_LINE_BYTES - len(buf)
+            if room > 0:
+                buf.extend(part[:room])
+            dropped += max(0, len(part) - max(room, 0))
+
+        def line() -> str:
+            nonlocal dropped
+            text = bytes(buf).decode(errors="replace")
+            if dropped:
+                text += cut_note(dropped)
+            buf.clear()
+            dropped = 0
+            return text
+
         while True:
-            line = await self._proc.stdout.readline()
-            if not line:
+            chunk = await self._proc.stdout.read(READ_CHUNK)
+            if not chunk:
+                if buf or dropped:
+                    yield line()
                 return
-            yield line.decode(errors="replace").rstrip("\n")
+            start = 0
+            while (end := chunk.find(b"\n", start)) != -1:
+                take(chunk[start:end])
+                yield line()
+                start = end + 1
+            take(chunk[start:])
 
     async def wait(self) -> int:
         return await self._proc.wait()
