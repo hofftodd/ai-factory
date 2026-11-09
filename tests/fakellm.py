@@ -476,8 +476,17 @@ DEMO_TASKS = [
 ]
 
 
+DEMO_ENVIRONMENT = (
+    "<<<FILE .foreman/Dockerfile\nFROM foreman/executor-base\n>>>\n"
+    "<<<FILE .foreman/check.sh\n#!/bin/sh\nset -e\ncommand -v sh\ncommand -v git\n>>>\n"
+    "The base image already has everything this greeter needs."
+)
+
+
 def demo_planner(req: dict[str, Any]) -> str:
     """A scripted planner for demos and browser tests (greeter project)."""
+    if "You are the Environment Agent" in system_text(req):
+        return DEMO_ENVIRONMENT
     if "break the project into small, ordered tasks" in system_text(req):
         return "```json\n" + json.dumps(DEMO_TASKS, indent=2) + "\n```"
     turns = sum(1 for m in req.get("messages", []) if m.get("role") == "user")
