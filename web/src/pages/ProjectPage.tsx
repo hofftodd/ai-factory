@@ -224,6 +224,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     plan_approval: project.gates?.plan_approval !== false,
     spend_cap_usd: project.spend_cap_usd,
     min_task_coverage: project.min_task_coverage,
+    max_parallel_tasks: project.max_parallel_tasks ?? 1,
     test_paths: project.test_paths.join(", "),
     test_note: project.test_note ?? "",
   });
@@ -268,6 +269,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
             context_budget_pct: f.context_budget_pct,
             spend_cap_usd: f.spend_cap_usd,
             min_task_coverage: f.min_task_coverage,
+            max_parallel_tasks: f.max_parallel_tasks,
             test_paths: f.test_paths.split(",").map((x) => x.trim()).filter(Boolean),
             test_note: f.test_note.trim(),
             gates: { ...project.gates, plan_approval: f.plan_approval, ...g },
@@ -321,6 +323,9 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
       ))}
       <h3>Tasks</h3>
       <div className="grid2">
+        <Field label="Tasks at once" hint="Independent tasks that may run side by side; merges stay one at a time, and a task is re-tested if others merged meanwhile">
+          <input type="number" min={1} max={8} value={f.max_parallel_tasks} onChange={(e) => set("max_parallel_tasks", Number(e.target.value))} />
+        </Field>
         <Field label="Max files per task">
           <input type="number" min={1} max={20} value={f.max_task_files} onChange={(e) => set("max_task_files", Number(e.target.value))} />
         </Field>

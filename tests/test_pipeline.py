@@ -303,6 +303,67 @@ async def test_a_conflict_report_with_a_green_suite_is_ignored(client, origin):
     assert not any(m.startswith("sent back to the Tester") for m in texts)
 
 
+def _check(name: str, body: str) -> str:
+    return RUNNER + f"cat > tests/check_{name}.sh <<'EOS'\n{body}\nEOS\n"
+
+
+async def test_parallel_tasks_that_break_each_other_are_caught_before_merging(client, origin):
+    """A and B each pass on their own; together B's test fails. B finishes after A has
+    merged, so it is re-tested with A's work and refused instead of breaking the branch."""
+    p = make_project(client, origin, max_parallel_tasks=2)
+    a = add_task(
+        client,
+        p["id"],
+        scripts(tester=_check("a", "test -f a.txt"), builder="echo a > a.txt"),
+        title="A",
+    )
+    b = add_task(
+        client,
+        p["id"],
+        scripts(
+            tester=_check("b", "test -f b.txt && test ! -f a.txt"),
+            builder="sleep 3\necho b > b.txt",
+        ),
+        title="B",
+    )
+    orch = Orchestrator()
+    await drive(orch, lambda: {task(a["id"]).state, task(b["id"]).state} <= TERMINAL, timeout=90)
+    assert task(a["id"]).state == TaskState.DONE
+    row = task(b["id"])
+    assert row.state == TaskState.FAILED
+    assert "tests fail after bringing in work merged" in row.reason
+    # They ran side by side: B started before A was done.
+    a_runs, b_runs = runs_of(a["id"]), runs_of(b["id"])
+    assert b_runs[0].started_at < max(r.ended_at or 0 for r in a_runs)
+    repo = gitops.repo_dir(p["id"])
+    assert (repo / "a.txt").exists() and not (repo / "b.txt").exists()
+
+
+async def test_parallel_tasks_editing_the_same_file_conflict_instead_of_merging(client, origin):
+    p = make_project(client, origin, max_parallel_tasks=2)
+    a = add_task(
+        client,
+        p["id"],
+        scripts(tester=_check("a", "grep -q A shared.txt"), builder="echo A > shared.txt"),
+        title="A",
+    )
+    b = add_task(
+        client,
+        p["id"],
+        scripts(
+            tester=_check("b", "grep -q B shared.txt"),
+            builder="sleep 3\necho B > shared.txt",
+        ),
+        title="B",
+    )
+    orch = Orchestrator()
+    await drive(orch, lambda: {task(a["id"]).state, task(b["id"]).state} <= TERMINAL, timeout=90)
+    assert task(a["id"]).state == TaskState.DONE
+    row = task(b["id"])
+    assert row.state == TaskState.FAILED and "conflicts with work merged" in row.reason
+    assert (gitops.repo_dir(p["id"]) / "shared.txt").read_text() == "A\n"
+
+
 # A runner that also runs the acceptance tests, as older projects' runners did.
 RUNNER_ALL = RUNNER.replace(
     "for t in tests/check_*.sh; do",

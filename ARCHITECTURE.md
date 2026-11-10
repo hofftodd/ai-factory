@@ -191,8 +191,13 @@ Everything lives under the data directory (`./data` by default):
    provides. The agent runs again when you press *Rebuild environment*, or
    after going back to planning if the requirements or design changed. (No
    Docker, no images: with the local runtime this step is skipped.)
-5. **Execute.** Tasks run one at a time per project, in dependency order.
-   Several projects can run side by side on different model servers. You
+5. **Execute.** Tasks run in dependency order, one at a time per project
+   unless the project allows more (*Tasks at once*): then independent tasks run
+   side by side. Their merges into the milestone branch stay one at a time, and
+   a task that finishes after others merged brings their work in and runs the
+   whole suite again first; a red suite or a conflict sends it back, so two
+   tasks that pass on their own can't break the branch together. Several
+   projects can run side by side on different model servers. You
    can go **back to planning** at any point when nothing is running: the
    project returns to step 1 with its finished tasks kept. The next
    breakdown is told what is already done and plans only the rest (no
