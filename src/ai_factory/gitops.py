@@ -15,13 +15,30 @@ from __future__ import annotations
 import base64
 import fnmatch
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ai_factory.config import get_settings
 from ai_factory.core.state import github_token
 
 # Marks the commit a task clone started from.
 BASE_REF = "refs/ai-factory/base"
+
+# Files tools generate while code and tests run. They are never committed: the same
+# bytecode or cache file differs on every run, so two tasks running side by side would
+# always conflict on it (and a binary file can't be merged). Written to each clone's
+# .git/info/exclude, so the project's own .gitignore stays the agents' business.
+GENERATED = (
+    "__pycache__/",
+    "*.py[cod]",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    "node_modules/",
+    ".coverage",
+    ".coverage.*",
+    "htmlcov/",
+)
+_EXCLUDE_MARK = "# ai-factory: generated files, never committed"
 
 GIT_IDENTITY = [
     "-c",
@@ -91,6 +108,53 @@ def clone_project(project_id: int, repo_url: str, milestone_branch: str) -> str:
     return default_branch
 
 
+def is_generated(rel: str) -> bool:
+    """Whether a repo path is a generated file (GENERATED), by any of its parts."""
+    parts = PurePosixPath(rel).parts
+    for pattern in GENERATED:
+        if pattern.endswith("/"):
+            if pattern.rstrip("/") in parts[:-1] or pattern.rstrip("/") == parts[-1]:
+                return True
+        elif any(fnmatch.fnmatch(p, pattern) for p in parts):
+            return True
+    return False
+
+
+def ensure_excludes(repo: Path) -> None:
+    """Add GENERATED to the clone's .git/info/exclude (once)."""
+    path = repo / ".git" / "info" / "exclude"
+    if not path.parent.is_dir():
+        return
+    text = path.read_text() if path.exists() else ""
+    if _EXCLUDE_MARK in text:
+        return
+    block = "\n".join([_EXCLUDE_MARK, *GENERATED]) + "\n"
+    path.write_text(text + ("" if not text or text.endswith("\n") else "\n") + block)
+
+
+def untrack_generated(repo: Path) -> list[str]:
+    """Stop tracking generated files committed earlier (they stay on disk, excluded)."""
+    tracked = _read("ls-files", "-z", cwd=repo).split("\0")
+    found = [f for f in tracked if f and is_generated(f)]
+    for i in range(0, len(found), 200):
+        batch = found[i : i + 200]
+        git("rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", *batch, cwd=repo)
+    return found
+
+
+def _resolve_generated(repo: Path) -> list[str]:
+    """In a merge that stopped on conflicts: if every conflicted file is generated,
+    drop them all and finish the merge. Returns the conflicted files that are not
+    generated (then nothing was resolved and the merge is still open)."""
+    conflicted = _read("diff", "--name-only", "--diff-filter=U", cwd=repo).split()
+    real = [f for f in conflicted if not is_generated(f)]
+    if real or not conflicted:
+        return real or conflicted
+    git("rm", "-r", "-f", "--quiet", "--ignore-unmatch", "--", *conflicted, cwd=repo)
+    git("commit", "-q", "--no-edit", cwd=repo)
+    return []
+
+
 def has_commits(repo: Path) -> bool:
     return bool(git("rev-parse", "--verify", "-q", "HEAD", cwd=repo, check=False).strip())
 
@@ -106,6 +170,7 @@ def prepare_task_clone(project_id: int, task_id: int, milestone_branch: str) -> 
     git("remote", "remove", "origin", cwd=dest)
     git("checkout", "-b", task_branch(task_id), cwd=dest)
     git("update-ref", BASE_REF, "HEAD", cwd=dest)
+    ensure_excludes(dest)
     return dest
 
 
@@ -124,6 +189,7 @@ def sync_task_clone(project_id: int, task_id: int, milestone_branch: str) -> boo
     was) when the task's work conflicts with the milestone branch.
     """
     dest, repo = task_dir(project_id, task_id), repo_dir(project_id)
+    ensure_excludes(dest)
     tip = git("rev-parse", milestone_branch, cwd=repo).strip()
     if git("rev-parse", BASE_REF, cwd=dest).strip() == tip:
         return False
@@ -145,9 +211,10 @@ def sync_task_clone(project_id: int, task_id: int, milestone_branch: str) -> boo
             text=True,
         )
         if proc.returncode != 0:
-            files = _read("diff", "--name-only", "--diff-filter=U", cwd=dest).split()
-            git("merge", "--abort", cwd=dest, check=False)
-            raise MergeConflict(files)
+            files = _resolve_generated(dest)
+            if files:
+                git("merge", "--abort", cwd=dest, check=False)
+                raise MergeConflict(files)
     git("update-ref", BASE_REF, tip, cwd=dest)
     return merged
 
@@ -174,8 +241,11 @@ def reset_task_clone(project_id: int, task_id: int) -> None:
 
 
 def commit_all(path: Path, message: str) -> bool:
-    """Commit any pending changes in the task clone. Returns True if a commit was made."""
+    """Commit any pending changes in the task clone, never generated files (GENERATED;
+    ones committed before are untracked). Returns True if a commit was made."""
+    ensure_excludes(path)
     git("add", "-A", cwd=path)
+    untrack_generated(path)
     if not git("status", "--porcelain", cwd=path).strip():
         return False
     git("commit", "-q", "-m", message, cwd=path)
@@ -256,6 +326,7 @@ def out_of_scope(files: list[str], globs: list[str]) -> list[str]:
 def merge_task(project_id: int, task_id: int, title: str) -> None:
     """Merge the task branch into the milestone branch in the main clone."""
     repo = repo_dir(project_id)
+    ensure_excludes(repo)
     branch = task_branch(task_id)
     # Push from the task clone rather than fetch into the main repo: the task clone is
     # owned by the container user, and git refuses to serve fetches from a repository
@@ -275,8 +346,12 @@ def merge_task(project_id: int, task_id: int, title: str) -> None:
         text=True,
     )
     if proc.returncode != 0:
-        git("merge", "--abort", cwd=repo, check=False)
-        raise GitError(f"merge conflict: {proc.stdout.strip()} {proc.stderr.strip()}")
+        # A task that stopped tracking generated files meets a branch that still changed
+        # them: those conflicts resolve themselves; anything else is a real conflict.
+        real = _resolve_generated(repo)
+        if real:
+            git("merge", "--abort", cwd=repo, check=False)
+            raise GitError(f"merge conflict: {proc.stdout.strip()} {proc.stderr.strip()}")
 
 
 def recover_repo(project_id: int, milestone_branch: str) -> list[str]:

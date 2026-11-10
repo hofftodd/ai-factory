@@ -170,9 +170,15 @@ def collect(results_dir: Path, workspace: Path) -> Results:
 
 
 def is_task_case(case: Case, test_files: list[str]) -> bool:
-    """Whether a test case lives in one of the files the Tester changed for the task."""
+    """Whether a test case lives in one of the files the Tester changed for the task.
+
+    Python runners name a case's class with dots (`tests.test_greet.TestX`); JS runners
+    such as Vitest and Jest use the file's path (`tests/frontend/registry.test.ts`),
+    also for a file that failed to load."""
     for f in test_files:
-        if case.file and case.file == f:
+        if case.file and _rel(case.file) == f:
+            return True
+        if case.classname and _rel(case.classname) == f:
             return True
         stem = PurePosixPath(f).with_suffix("").as_posix()
         dotted = stem.replace("/", ".")
