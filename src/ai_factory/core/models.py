@@ -66,6 +66,8 @@ class GateKind(StrEnum):
     MILESTONE = "milestone"  # acceptance passed; approve to push / open the PR
     BUDGET = "budget"  # the project reached its spend cap; approve to raise it
     COVERAGE = "coverage"  # a task's changed lines are under-tested; merge anyway or send back
+    # a task's new tests all passed before any work: merge the tests, or back to the Tester
+    ALREADY_BUILT = "already_built"
 
 
 class GateState(StrEnum):
@@ -229,6 +231,10 @@ class Task(SQLModel, table=True):
     state: TaskState = TaskState.QUEUED
     # Task-level pause: don't start; if running, park after the current step.
     hold: bool = False
+    # No Builder step: the task's work is its tests alone, and they merge once the suite
+    # passes (it changes only acceptance tests, or the user decided the work was already
+    # there: GateKind.ALREADY_BUILT).
+    no_build: bool = False
     reason: str = ""
     attempts: int = 0
     created_at: float = Field(default_factory=now)

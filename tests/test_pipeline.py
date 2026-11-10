@@ -385,6 +385,82 @@ async def test_bytecode_the_project_tracks_trips_no_role_check(client, origin, t
     assert not [f for f in git("ls-files", cwd=repo).split() if "__pycache__" in f]
 
 
+# A Builder that must never run: it leaves a mark if it does.
+NO_BUILDER = "echo built > builder-ran.txt\n"
+
+
+async def test_a_task_that_changes_only_acceptance_tests_merges_without_a_builder(client, origin):
+    p = make_project(client, origin)
+    first = add_task(client, p["id"], scripts(), title="Greet")
+    acc = (
+        "mkdir -p tests/acceptance\n"
+        "echo 'sh greet.sh bob | grep -q bob' > tests/acceptance/check_samples.sh\n"
+    )
+    t = add_task(
+        client,
+        p["id"],
+        scripts(tester=acc, builder=NO_BUILDER),
+        title="Use samples in the acceptance tests",
+        deps=[first["id"]],
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.DONE, row.reason
+    assert row.no_build and [r.step for r in runs_of(t["id"])] == ["tester"]
+    repo = gitops.repo_dir(p["id"])
+    assert (repo / "tests" / "acceptance" / "check_samples.sh").exists()
+    assert not (repo / "builder-ran.txt").exists()
+
+
+ALREADY_PASSING = (
+    'mkdir -p tests\necho \'test "$(sh greet.sh ann)" = "hello ann"\' > tests/check_ann.sh\n'
+)
+
+
+async def _already_built(client, origin) -> tuple[dict, dict]:
+    p = make_project(client, origin)
+    first = add_task(client, p["id"], scripts(), title="Greet")
+    t = add_task(
+        client,
+        p["id"],
+        scripts(tester=ALREADY_PASSING, builder=NO_BUILDER),
+        title="Greet Ann",
+        deps=[first["id"]],
+    )
+    waiting = {*TERMINAL, TaskState.BLOCKED}
+    await drive(Orchestrator(), lambda: task(t["id"]).state in waiting, timeout=60)
+    return p, t
+
+
+async def test_tests_that_already_pass_ask_the_user_and_can_merge(client, origin):
+    p, t = await _already_built(client, origin)
+    row = task(t["id"])
+    assert row.state == TaskState.BLOCKED and "already pass" in row.reason
+    gate = next(g for g in client.get("/api/gates").json() if g["task_id"] == t["id"])
+    assert gate["kind"] == "already_built" and gate["state"] == "pending"
+    client.post(f"/api/gates/{gate['id']}/resolve", json={"approve": True})
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.DONE, row.reason
+    with session() as s:
+        started = [e.message for e in s.exec(select(Event).where(Event.task_id == t["id"]))]
+    assert not any("Builder Agent starting" in m for m in started)
+    repo = gitops.repo_dir(p["id"])
+    assert (repo / "tests" / "check_ann.sh").exists() and not (repo / "builder-ran.txt").exists()
+
+
+async def test_tests_that_already_pass_can_go_back_to_the_tester(client, origin):
+    _, t = await _already_built(client, origin)
+    gate = next(g for g in client.get("/api/gates").json() if g["task_id"] == t["id"])
+    client.post(
+        f"/api/gates/{gate['id']}/resolve", json={"approve": False, "note": "test Ann's title"}
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state != TaskState.BLOCKED, timeout=30)
+    row = task(t["id"])
+    assert not row.tests_ready and not row.no_build
+    assert row.state in (TaskState.QUEUED, TaskState.RUNNING, *TERMINAL)
+
+
 # A runner that also runs the acceptance tests, as older projects' runners did.
 RUNNER_ALL = RUNNER.replace(
     "for t in tests/check_*.sh; do",
@@ -462,11 +538,13 @@ async def test_new_tests_must_fail_first(client, origin):
     p = make_project(client, origin)
     passing = RUNNER + "echo true > tests/check_already.sh\n"
     t = add_task(client, p["id"], scripts(tester=passing))
-    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    waiting = {*TERMINAL, TaskState.BLOCKED}
+    await drive(Orchestrator(), lambda: task(t["id"]).state in waiting)
     row = task(t["id"])
-    assert row.state == TaskState.FAILED and "already pass" in row.reason
+    # Tests that pass before any work: the user decides whether it's already built.
+    assert row.state == TaskState.BLOCKED and "already pass" in row.reason
     assert [r.step for r in runs_of(t["id"])] == ["tester"]
-    assert runs_of(t["id"])[0].failure_kind == "no_red"
+    assert [g["kind"] for g in client.get("/api/gates").json()] == ["already_built"]
 
 
 async def test_repair_tasks_hear_which_acceptance_tests_fail(client, origin):

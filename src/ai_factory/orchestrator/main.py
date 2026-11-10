@@ -259,7 +259,11 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             continue
         if t.id in stopping_tasks:
             continue
-        if any(by_id.get(d) is None or by_id[d].state != TaskState.DONE for d in t.deps):
+        # A discarded dependency (by the user or by replanning) is no longer waited for.
+        if any(
+            by_id.get(d) is None or by_id[d].state not in (TaskState.DONE, TaskState.DISCARDED)
+            for d in t.deps
+        ):
             continue
         kind, _, _ = resolve_executor(p, t)
         try:

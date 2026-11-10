@@ -23,7 +23,7 @@ def send_back_to_tester(
         t = s.get(Task, task_id)
         if t is None or t.state not in frm:
             return
-        t.tests_ready, t.tests_commit = False, ""
+        t.tests_ready, t.tests_commit, t.no_build = False, "", False
         t.escalation_level, t.level_failures = 0, 0
         s.add(t)
         s.commit()
@@ -74,6 +74,22 @@ async def handle(gate: Gate) -> None:
                     )
             else:
                 send_back_to_tester(gate.task_id, (TaskState.AWAITING_MERGE,), gate.note)
+        elif gate.kind == GateKind.ALREADY_BUILT and gate.task_id is not None:
+            if approved:  # merge the tests: no Builder, the suite runs again first
+                with session() as s:
+                    t = s.get(Task, gate.task_id)
+                    if t is not None:
+                        t.no_build, t.escalation_level, t.level_failures = True, 0, 0
+                        s.add(t)
+                        s.commit()
+                transition(
+                    gate.task_id,
+                    (TaskState.BLOCKED,),
+                    TaskState.QUEUED,
+                    "the user agreed the work is already there: merging its tests",
+                )
+            else:
+                send_back_to_tester(gate.task_id, (TaskState.BLOCKED,), gate.note)
         elif gate.kind == GateKind.ESCALATION:
             if gate.task_id is not None and gate.payload.get("action") == "send_back":
                 send_back_to_tester(gate.task_id, (TaskState.BLOCKED,), gate.note)
