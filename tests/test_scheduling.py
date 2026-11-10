@@ -374,7 +374,9 @@ def test_further_choices_are_saved_and_checked(client, origin):
     assert r.status_code == 400 and "node not found" in r.text
 
 
-def _queued(project_id: int, title: str, deps: list[int] | None = None) -> int:
+def _queued(
+    project_id: int, title: str, deps: list[int] | None = None, req_refs: list[str] | None = None
+) -> int:
     with session() as s:
         t = Task(
             project_id=project_id,
@@ -382,6 +384,7 @@ def _queued(project_id: int, title: str, deps: list[int] | None = None) -> int:
             validation_cmd="true",
             executor_script="true",
             deps=deps or [],
+            req_refs=req_refs or [],
         )
         s.add(t)
         s.commit()
@@ -429,3 +432,21 @@ def test_a_discarded_dependency_no_longer_holds_its_dependents(client, origin):
     assert [t.id for t, _, _ in pick_ready()] == [a]
     assert client.post(f"/api/tasks/{a}/discard").status_code == 200
     assert [t.id for t, _, _ in pick_ready()] == [b]
+
+
+def test_tasks_in_one_requirement_area_do_not_run_together(client, origin):
+    """future-lab's T8 and T9 (both FR-2), then T14 and T15 (both FR-5), conflicted."""
+    p = make_project(client, origin, max_parallel_tasks=3)
+    a = _queued(p["id"], "update and delete", req_refs=["FR-2.4", "NFR-1"])
+    _queued(p["id"], "listing", req_refs=["FR-2.2", "NFR-1"])
+    c = _queued(p["id"], "screens", req_refs=["FR-4.1", "NFR-1"])  # NFR-1 is cross-cutting
+    d = _queued(p["id"], "no refs")
+    assert [t.id for t, _, _ in pick_ready()] == [a, c, d]
+    with session() as s:
+        row = s.get(Task, a)
+        assert row is not None
+        row.state = TaskState.RUNNING
+        s.add(row)
+        s.commit()
+    assert a not in [t.id for t, _, _ in pick_ready()]
+    assert all("FR-2.2" not in t.req_refs for t, _, _ in pick_ready())

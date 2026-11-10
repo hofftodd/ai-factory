@@ -219,6 +219,52 @@ def sync_task_clone(project_id: int, task_id: int, milestone_branch: str) -> boo
     return merged
 
 
+CONFLICT_MARKERS = ("<<<<<<< ", ">>>>>>> ")
+
+
+def merge_keeping_conflicts(project_id: int, task_id: int, milestone_branch: str) -> list[str]:
+    """Merge the milestone branch into the task clone and commit the conflicted files with
+    their conflict markers in place, for the Builder to resolve. Conflicted generated files
+    are dropped. Returns the files left with markers; BASE_REF moves to the milestone
+    commit, as after a clean sync."""
+    dest, repo = task_dir(project_id, task_id), repo_dir(project_id)
+    tip = git("rev-parse", milestone_branch, cwd=repo).strip()
+    git("fetch", "--quiet", str(repo), milestone_branch, cwd=dest)
+    cmd = [
+        "git",
+        *GIT_IDENTITY,
+        "merge",
+        "--autostash",
+        "-m",
+        f"Merge {milestone_branch} into task {task_id} (conflicts left for the Builder)",
+        tip,
+    ]
+    subprocess.run(cmd, cwd=dest, capture_output=True, text=True)
+    conflicted = _read("diff", "--name-only", "--diff-filter=U", cwd=dest).split()
+    generated = [f for f in conflicted if is_generated(f)]
+    if generated:
+        git("rm", "-r", "-f", "--quiet", "--ignore-unmatch", "--", *generated, cwd=dest)
+    real = [f for f in conflicted if not is_generated(f)]
+    git("add", "-A", cwd=dest)
+    if (dest / ".git" / "MERGE_HEAD").exists():
+        git("commit", "-q", "--no-edit", cwd=dest)
+    git("update-ref", BASE_REF, tip, cwd=dest)
+    return real
+
+
+def conflict_markers(path: Path, files: list[str]) -> list[str]:
+    """The files that still have git conflict markers at the start of a line."""
+    left = []
+    for f in files:
+        try:
+            lines = (path / f).read_text(errors="replace").splitlines()
+        except OSError:
+            continue  # deleted: resolved
+        if any(line.startswith(CONFLICT_MARKERS) for line in lines):
+            left.append(f)
+    return left
+
+
 def is_ancestor(path: Path, sha: str, ref: str = "HEAD") -> bool:
     """Whether `sha` is already part of `ref`'s history (False if the clone lacks it)."""
     cmd = ["git", *GIT_IDENTITY, "merge-base", "--is-ancestor", sha, ref]
