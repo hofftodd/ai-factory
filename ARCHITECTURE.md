@@ -312,8 +312,11 @@ When a limit is hit, the gateway marks the attempt and the orchestrator
 kills the container within seconds.
 
 **The watchdog limits** (per attempt, adjustable per project): 60 model
-calls, 400,000 tokens, 800 changed lines, 3 identical responses in a row,
-and a time limit per task.
+calls, 400,000 new tokens, 800 changed lines, 3 identical responses in a row,
+and a time limit per task. New tokens are the prompt the model hadn't already
+seen in the attempt, plus its output: each call of an agent session resends the
+whole conversation, which the server mostly has cached, so counting every
+prompt in full would trip long, healthy sessions.
 
 **The escalation ladder.** A failed attempt doesn't just stop the project:
 

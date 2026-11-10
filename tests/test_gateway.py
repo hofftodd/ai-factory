@@ -169,10 +169,35 @@ async def test_request_budget_trips_watchdog(gw, llm):
 
 
 async def test_token_budget_trips_watchdog(gw, llm):
+    # The fake server reports a 10-token prompt and a 5-token reply on every call. The
+    # same prompt again isn't new (the server has it cached), so each later call adds
+    # only its 5 output tokens: 15, 20, 25 > 20.
     run = make_run(llm, {"max_tokens": 20, "repeat_limit": 99})
     await _a(chat, gw, run)
     await _a(chat, gw, run)
-    assert "token budget exceeded" in reload(run).watchdog
+    row = reload(run)
+    assert not row.watchdog and row.budget_tokens == 20
+    assert row.tokens_in + row.tokens_out == 30  # the raw totals still count everything
+    await _a(chat, gw, run)
+    assert "token budget exceeded (25 new tokens > 20)" in reload(run).watchdog
+
+
+@pytest.mark.parametrize(
+    "prompt,previous,cached,new",
+    [
+        (1000, 0, 0, 1000),  # first call: all of it is new
+        (1500, 1000, 0, 500),  # the conversation grew by 500
+        (1000, 1000, 0, 0),  # sent again unchanged
+        (400, 1500, 0, 400),  # compacted: all of a smaller prompt is new
+        (1500, 1000, 1400, 100),  # the server says only 100 weren't cached
+        (400, 1500, 300, 100),  # compacted, but the server still had most of it
+        (1500, 1000, 200, 500),  # a server cache report never makes it larger
+    ],
+)
+def test_new_prompt_tokens(prompt, previous, cached, new):
+    from ai_factory.gateway import new_prompt_tokens
+
+    assert new_prompt_tokens(prompt, previous, cached) == new
 
 
 @pytest.mark.parametrize("stream", [False, True])

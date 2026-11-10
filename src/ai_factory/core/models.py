@@ -244,6 +244,11 @@ class TaskRun(SQLModel, table=True):
     model_requests: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
+    # What the token budget counts: prompt tokens the model hadn't already seen in this
+    # run, plus completions (gateway.new_prompt_tokens). Each call of an agent session
+    # resends the whole conversation, which servers mostly serve from cache, so the raw
+    # totals above grow with the square of the session's length.
+    budget_tokens: int = 0
     # Why the watchdog stopped this run (empty = it didn't).
     watchdog: str = ""
     # Normalised hash of the failure output, to detect the same failure repeating.

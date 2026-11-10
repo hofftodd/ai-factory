@@ -68,6 +68,7 @@ export interface TaskRun {
   state: "running" | "succeeded" | "failed" | "stopped" | "interrupted";
   model_requests: number;
   tokens_in: number;
+  budget_tokens: number;
   tokens_out: number;
   watchdog: string;
   failure_kind: string;
