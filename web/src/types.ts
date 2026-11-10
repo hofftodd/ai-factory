@@ -237,7 +237,8 @@ export type GateKind =
   | "escalation"
   | "milestone"
   | "budget"
-  | "coverage";
+  | "coverage"
+  | "already_built";
 
 export interface TestCase {
   id: number;

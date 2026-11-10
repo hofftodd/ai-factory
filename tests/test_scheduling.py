@@ -420,3 +420,12 @@ def test_running_tasks_count_against_the_limit(client, origin):
     first = _queued(p["id"], "a")
     _queued(p["id"], "b")
     assert [t.id for t, _, _ in pick_ready()] == [first]
+
+
+def test_a_discarded_dependency_no_longer_holds_its_dependents(client, origin):
+    p = make_project(client, origin, max_parallel_tasks=2)
+    a = _queued(p["id"], "already built elsewhere")
+    b = _queued(p["id"], "needs a", deps=[a])
+    assert [t.id for t, _, _ in pick_ready()] == [a]
+    assert client.post(f"/api/tasks/{a}/discard").status_code == 200
+    assert [t.id for t, _, _ in pick_ready()] == [b]

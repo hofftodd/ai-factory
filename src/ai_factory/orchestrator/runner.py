@@ -685,7 +685,7 @@ class TaskRunner:
         if task.tests_ready and not gitops.has_commit(clone, task.tests_commit):
             task = self._update_task(tests_ready=False, tests_commit="")  # clone was reset
         steps = [] if task.tests_ready else [roles.TESTER]
-        if task.kind != "acceptance":
+        if task.kind != "acceptance" and not task.no_build:
             steps.append(roles.BUILDER)
         for i, role in enumerate(steps):
             if i == 0:
@@ -697,7 +697,9 @@ class TaskRunner:
             else:
                 await self._builder(project, clone, executor)
             task = self._check()
-        if task.kind == "acceptance" or not steps:
+            if task.no_build:
+                break  # its tests are the whole task (acceptance tests only)
+        if task.kind == "acceptance" or not steps or task.no_build:
             if not transition(self.task_id, (TaskState.RUNNING,), TaskState.VALIDATING):
                 raise Stopped("not running")
             await self._merge_or_gate(project)
@@ -878,7 +880,32 @@ class TaskRunner:
             raise StepFailed(f"there is no test runner: {SUITE_RUNNER} is missing", kind="no_tests")
         # Record the new tests' first results: they are expected to fail for now.
         result = await self._run_suite(project, clone, "tester", changed, base="")
+        green = (
+            result is not None
+            and result[1] == 0
+            and not result[0].problem
+            and not (result[0].failed + result[0].errors)
+        )
+        if self._acceptance_only(task, project, changed):
+            # Acceptance tests run only at the end, against the finished project, so they
+            # can't fail first here; the regular suite must still pass, and no Builder runs.
+            if not green:
+                raise StepFailed(
+                    "this task changes only acceptance tests, and the regular suite fails",
+                    "\n".join(self._tail),
+                    kind="validation",
+                )
+            self._emit(
+                "system",
+                f"the task changes only acceptance tests ({roles.ACCEPTANCE_DIR}/): no "
+                "Builder step; it merges once the suite passes",
+            )
+            self._update_task(tests_ready=True, tests_commit=gitops.head(clone), no_build=True)
+            return
         if result is not None and self._needs_red(task) and not self._task_failures(result[0]):
+            if green and self._task_cases(result[0]):
+                self._update_task(tests_ready=True, tests_commit=gitops.head(clone))
+                self._already_built(task, self._task_cases(result[0]))
             raise StepFailed(
                 "none of this task's new tests fail: they already pass against the current "
                 "code, so they don't test what this task must change. Write tests that fail "
@@ -1106,6 +1133,46 @@ class TaskRunner:
                 )
             ).first()
         return built is None
+
+    def _acceptance_only(self, task: Task, project: Project, changed: list[str]) -> bool:
+        """The Tester changed only acceptance tests (a feature task the Task Planner added
+        to refine them): there is nothing for a Builder to do."""
+        if task.kind in ("setup", "acceptance"):
+            return False
+        tests = [f for f in changed if roles.is_test_path(project, f)]
+        prefix = roles.ACCEPTANCE_DIR + "/"
+        return bool(tests) and all(f.startswith(prefix) for f in tests)
+
+    def _already_built(self, task: Task, passing: int) -> None:
+        """Every one of the task's new tests passed before any work: what it asks for is
+        probably there already (an earlier task built it). The user decides: merge the
+        tests and call the task done, or send it back to the Tester."""
+        why = (
+            f"its {passing} new tests already pass before any work: what it asks for looks "
+            "built already"
+        )
+        if not transition(self.task_id, (TaskState.RUNNING,), TaskState.BLOCKED, why):
+            raise Stopped("not running")
+        finish_run(self.run_id, RunState.SUCCEEDED, "tests already pass; asking the user")
+        gates.open_gate(
+            task.project_id,
+            GateKind.ALREADY_BUILT,
+            f"Task {task.key or self.task_id} looks done already: {task.title}",
+            f"All {passing} of the tests the Tester wrote for it pass against the current "
+            "code, before any Builder work, so an earlier task probably built this. Approve "
+            "to merge the tests (after the suite runs again) and mark the task done; reject "
+            "to send it back to the Tester for tests of what is still missing.",
+            task_id=self.task_id,
+        )
+        raise Stopped("waiting for the user: tests already pass")
+
+    def _task_cases(self, run: TestRun) -> int:
+        with session() as s:
+            return len(
+                s.exec(
+                    select(TestCase).where(TestCase.test_run_id == run.id, col(TestCase.task_test))
+                ).all()
+            )
 
     def _task_failures(self, run: TestRun) -> int:
         with session() as s:
