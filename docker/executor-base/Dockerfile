@@ -23,11 +23,15 @@ ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8
 
-# ripgrep: OpenCode's Grep and Glob tools need it, and would otherwise try to download
-# it at run time, which the sandbox's network lockdown blocks.
+# ripgrep and fd: OpenCode's Grep and Glob tools and pi's grep and find tools run them,
+# and would otherwise try to download them at run time, which the sandbox's network
+# lockdown blocks (Ubuntu names fd's binary fdfind; the tools look for fd). jq: agents
+# query JSON (schemas, package manifests, test reports) in one line instead of writing
+# a Python script for it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git bash tar gzip socat ripgrep \
+      ca-certificates curl git bash tar gzip socat ripgrep fd-find jq \
+ && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
 
 # OpenCode: single static binary from the GitHub release.

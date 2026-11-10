@@ -34,6 +34,8 @@ def test_pi_prepare(tmp_path):
     script = inv.command[-1]
     for flag in ("--mode json", "--no-session", "--offline", "--no-context-files", "--no-approve"):
         assert flag in script
+    # pi's own search tools on top of its defaults (they run rg and fd from the image).
+    assert "--tools read,bash,edit,write,grep,find,ls" in script
     assert 'PI_CODING_AGENT_DIR="$HOME/.pi/agent"' in script
     assert inv.env == {"AI_FACTORY_MODEL": "qwen3-coder"}
     assert inv.output is not None
@@ -86,7 +88,9 @@ def test_pi_output_reports_model_errors_despite_exit_0():
 def test_budget_subtracts_executor_overhead():
     p = Project(name="p", repo_url="x", context_budget_pct=50)
     assert budget_tokens(p, 32000, "shell") == 16000
-    assert budget_tokens(p, 32000, "pi") == (32000 - 1500) // 2
+    from ai_factory.executors.pi import PiExecutor
+
+    assert budget_tokens(p, 32000, "pi") == (32000 - PiExecutor.prompt_overhead_tokens) // 2
     assert budget_tokens(p, 32000, "opencode") == (32000 - 7500) // 2
     assert budget_tokens(p, 32000, "pi") > budget_tokens(p, 32000, "opencode")
     assert set(EXECUTORS) == {"pi", "opencode", "aider", "shell"}

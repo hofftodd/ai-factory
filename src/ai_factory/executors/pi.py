@@ -1,8 +1,11 @@
 """pi (https://pi.dev) in non-interactive JSON mode.
 
-pi is a small coding agent: four tools (read, bash, edit, write) and a short system
-prompt, about 1.5k tokens of overhead per request against ~7.5k for OpenCode, so
-more of a local model's window is left for the task.
+pi is a small coding agent with a short system prompt. It gets its four default
+tools (read, bash, edit, write) plus its built-in grep, find and ls, whose output is
+capped and respects .gitignore, so searching doesn't flood the context the way
+`grep -r` through bash can (they run ripgrep and fd from the executor image). That is
+about 2k tokens of overhead per request against ~7.5k for OpenCode, so more of a local
+model's window is left for the task.
 
 The run's model gateway URL is registered as a custom OpenAI-compatible provider
 named "ai-factory" in a generated `models.json`. pi reads that from its agent
@@ -37,6 +40,8 @@ DEFAULT_MAX_OUTPUT = 8192
 AUTO_MAX_OUTPUT = 32768
 TOOL_RESULT_LINES = 12
 
+TOOLS = ("read", "bash", "edit", "write", "grep", "find", "ls")
+
 FLAGS = [
     "--mode", "json",
     "--no-session",
@@ -48,6 +53,7 @@ FLAGS = [
     "--no-themes",
     "--no-context-files",
     "--no-approve",
+    "--tools", ",".join(TOOLS),
 ]  # fmt: skip
 
 
@@ -167,7 +173,8 @@ class PiOutput:
 class PiExecutor:
     kind = "pi"
     needs_node = True
-    prompt_overhead_tokens = 1500  # measured: ~1.4k (system prompt + 4 tool schemas)
+    # measured ~1.4k with the 4 default tools; grep, find and ls add ~0.5k (estimated)
+    prompt_overhead_tokens = 2000
     providers = frozenset({"openai"})  # pi talks to the gateway's chat completions API
 
     def prepare(

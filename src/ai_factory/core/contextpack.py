@@ -295,6 +295,15 @@ def build_prompt(project: Project, task: Task, previous_failure: str = "") -> st
 
 ENV_CHECK = ".ai-factory/check.sh"
 
+SEARCH_TOOLS = [
+    "## Finding your way",
+    "`rg` (ripgrep), `fd` and `jq` are installed. Search the code with `rg` and find files "
+    "with `fd` rather than `grep -r` and `find`; read or query JSON with `jq` (e.g. "
+    "`jq 'keys' file.json`) rather than writing a Python script for it. Read large files in "
+    "parts, not whole.",
+    "",
+]
+
 RESULTS_CONTRACT = [
     "## How tests run",
     "`tests/run.sh` runs the whole test suite except the acceptance tests "
@@ -490,6 +499,7 @@ def build_role_pack(
             "```",
             "",
         ]
+    lines += SEARCH_TOOLS
     lines += RESULTS_CONTRACT
     if role == "tester":
         lines += test_note_lines(project, setup=task.kind == "setup")
