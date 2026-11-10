@@ -73,6 +73,42 @@ def test_task_cases_are_found_by_file_or_class():
     assert not tr.is_task_case(c, files)
 
 
+# Vitest's JUnit report, as future-lab's T17 produced it: the class name is the file's
+# path, and a file that fails to load is one failed case named after the file.
+VITEST_JUNIT = """<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="3" failures="1" errors="0" time="0.02">
+  <testsuite name="tests/frontend/registry.test.ts"
+             tests="1" failures="1" errors="0" skipped="0" time="0">
+    <testcase classname="tests/frontend/registry.test.ts"
+              name="tests/frontend/registry.test.ts" time="0">
+      <failure message="Failed to resolve import ../../frontend/src/registry" type="Error">
+Error: Failed to resolve import
+      </failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/frontend/smoke.test.tsx"
+             tests="2" failures="0" errors="0" skipped="0" time="0.01">
+    <testcase classname="tests/frontend/smoke.test.tsx"
+              name="front-end skeleton &gt; renders" time="0.01">
+    </testcase>
+    <testcase classname="./tests/frontend/smoke.test.tsx"
+              name="front-end skeleton &gt; mounts" time="0.01">
+    </testcase>
+  </testsuite>
+</testsuites>
+"""
+
+
+def test_vitest_cases_are_found_by_their_path_class_names():
+    cases = tr.parse_junit(VITEST_JUNIT)
+    registry = ["tests/frontend/registry.test.ts"]
+    mine = [c for c in cases if tr.is_task_case(c, registry)]
+    assert [c.status for c in mine] == ["failed"]  # a file that fails to load counts
+    smoke = ["tests/frontend/smoke.test.tsx"]
+    assert sum(tr.is_task_case(c, smoke) for c in cases) == 2  # "./" prefix too
+    assert not any(tr.is_task_case(c, ["tests/frontend/other.test.ts"]) for c in cases)
+
+
 def test_changed_line_coverage(tmp_path):
     def git(*args):
         subprocess.run(

@@ -125,3 +125,82 @@ def test_sync_from_an_origin_that_was_empty_at_clone(tmp_path):
     done, _ = gitops.sync_from_origin(1, str(bare), "main")
     assert done == "merged 1 new commit from origin/main"
     assert (gitops.repo_dir(1) / "schema" / "a.json").exists()
+
+
+@pytest.mark.parametrize(
+    "path,generated",
+    [
+        ("backend/__pycache__/db.cpython-312.pyc", True),
+        ("x.pyc", True),
+        ("frontend/node_modules/react/index.js", True),
+        (".pytest_cache/v/cache/lastfailed", True),
+        (".coverage", True),
+        ("backend/db.py", False),
+        ("tests/backend/test_db.py", False),
+        ("docs/pycache-notes.md", False),
+    ],
+)
+def test_generated_files(path, generated):
+    assert gitops.is_generated(path) is generated
+
+
+def _with_tracked_bytecode(origin, tmp_path):
+    """An origin whose main already tracks bytecode, as future-lab's did."""
+    work = tmp_path / "seed2"
+    git("clone", "-q", str(origin), str(work), cwd=tmp_path)
+    (work / "src" / "__pycache__").mkdir()
+    (work / "src" / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00old")
+    git("add", "-A", cwd=work)
+    git("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", "pyc", cwd=work)
+    git("push", "-q", "origin", "HEAD:main", cwd=work)
+
+
+def test_task_commits_never_include_generated_files(origin, tmp_path):
+    _with_tracked_bytecode(origin, tmp_path)
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    clone = gitops.prepare_task_clone(1, 7, "ai-factory/m1")
+    (clone / "src" / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00new")
+    (clone / "src" / "__pycache__" / "extra.cpython-312.pyc").write_bytes(b"\x00")
+    (clone / "src" / "app.py").write_text("VALUE = 2\n")
+    assert gitops.commit_all(clone, "task 7")
+    tracked = git("ls-files", cwd=clone).split()
+    assert "src/app.py" in tracked
+    assert not [f for f in tracked if "__pycache__" in f]  # untracked, not deleted
+    assert (clone / "src" / "__pycache__" / "app.cpython-312.pyc").exists()
+
+
+def test_parallel_tasks_touching_bytecode_merge_cleanly(origin, tmp_path):
+    _with_tracked_bytecode(origin, tmp_path)
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    a = gitops.prepare_task_clone(1, 1, "ai-factory/m1")
+    b = gitops.prepare_task_clone(1, 2, "ai-factory/m1")
+    # Both tasks run the code; B is still on an older ai-factory clone that commits the
+    # bytecode it changed (as future-lab's T27 did), A stops tracking it.
+    (a / "src" / "a.py").write_text("A = 1\n")
+    (a / "src" / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00from-a")
+    assert gitops.commit_all(a, "task 1")
+    gitops.merge_task(1, 1, "A")
+    (b / "src" / "b.py").write_text("B = 1\n")
+    (b / "src" / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00from-b")
+    git("add", "-A", cwd=b)
+    git("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", "old-style", cwd=b)
+    # Bringing A's work into B conflicts only in bytecode: resolved, not refused.
+    assert gitops.sync_task_clone(1, 2, "ai-factory/m1")
+    gitops.merge_task(1, 2, "B")
+    repo = gitops.repo_dir(1)
+    assert (repo / "src" / "a.py").exists() and (repo / "src" / "b.py").exists()
+    assert not [f for f in git("ls-files", cwd=repo).split() if "__pycache__" in f]
+
+
+def test_real_conflicts_are_still_refused(origin, tmp_path):
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    a = gitops.prepare_task_clone(1, 1, "ai-factory/m1")
+    b = gitops.prepare_task_clone(1, 2, "ai-factory/m1")
+    (a / "src" / "app.py").write_text("VALUE = 'a'\n")
+    gitops.commit_all(a, "a")
+    gitops.merge_task(1, 1, "A")
+    (b / "src" / "app.py").write_text("VALUE = 'b'\n")
+    gitops.commit_all(b, "b")
+    with pytest.raises(gitops.MergeConflict) as e:
+        gitops.sync_task_clone(1, 2, "ai-factory/m1")
+    assert e.value.files == ["src/app.py"]
