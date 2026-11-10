@@ -351,7 +351,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <Field label="Max model calls">
           <input type="number" min={1} value={w.max_requests} onChange={(e) => setWd("max_requests", Number(e.target.value))} />
         </Field>
-        <Field label="Max tokens (in + out)">
+        <Field label="Max new tokens (prompt not seen before + output)">
           <input type="number" min={1000} step={1000} value={w.max_tokens} onChange={(e) => setWd("max_tokens", Number(e.target.value))} />
         </Field>
         <Field label="Max lines changed">

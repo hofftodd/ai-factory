@@ -283,7 +283,7 @@ function Watchdog({ t }: { t: Task }) {
       </div>
       <div className="meters">
         <Meter label="Model calls" value={run.model_requests} max={w.max_requests} />
-        <Meter label="Tokens" value={run.tokens_in + run.tokens_out} max={w.max_tokens} />
+        <Meter label="New tokens" value={run.budget_tokens ?? run.tokens_in + run.tokens_out} max={w.max_tokens} />
         <Meter label="Lines changed" value={run.diff_lines} max={w.max_diff_lines} />
         <Meter
           label="Time"

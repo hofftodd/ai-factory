@@ -118,6 +118,8 @@ def _error(status: int, message: str) -> JSONResponse:
 class Gateway:
     def __init__(self) -> None:
         self.signatures: dict[int, list[str]] = defaultdict(list)
+        # Per run: the previous call's prompt size, for new_prompt_tokens.
+        self.last_prompt: dict[int, int] = {}
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=900.0, write=60.0, pool=30.0)
         )
@@ -155,17 +157,21 @@ class Gateway:
         content: str,
         tool_calls: list[dict[str, Any]],
         billed_in: float | None = None,
+        cached_in: int = 0,
     ) -> None:
         run_id = info.run.id
         assert run_id is not None
+        new_in = new_prompt_tokens(tokens_in, self.last_prompt.get(run_id, 0), cached_in)
+        self.last_prompt[run_id] = tokens_in
         with session() as s:
             run = s.get(TaskRun, run_id)
             assert run is not None
             run.tokens_in += tokens_in
             run.tokens_out += tokens_out
+            run.budget_tokens += new_in + tokens_out
             s.add(run)
             s.commit()
-            total = run.tokens_in + run.tokens_out
+            total = run.budget_tokens
         spend.charge(
             info.run.project_id,
             info.node,
@@ -174,7 +180,7 @@ class Gateway:
         )
         cap = watchdog.limit(info.project, "max_tokens")
         if total > cap:
-            trip(run_id, f"token budget exceeded ({total:,} > {cap:,})")
+            trip(run_id, f"token budget exceeded ({total:,} new tokens > {cap:,})")
             return
         sigs = self.signatures[run_id]
         sigs.append(watchdog.response_signature(content, tool_calls))
@@ -262,6 +268,7 @@ class Gateway:
                 usage.get("completion_tokens") or estimate_tokens(content),
                 content,
                 msg.get("tool_calls") or [],
+                cached_in=_openai_cached(usage),
             )
         return Response(
             r.content, status_code=r.status_code, media_type=r.headers.get("content-type")
@@ -287,7 +294,7 @@ class Gateway:
         async def relay() -> AsyncIterator[bytes]:
             content: list[str] = []
             calls: dict[int, dict[str, Any]] = {}
-            usage: dict[str, int] = {}
+            usage: dict[str, Any] = {}
             started = time.monotonic()
             buf = b""
             try:
@@ -308,6 +315,7 @@ class Gateway:
                     or estimate_tokens(text + json.dumps(tool_calls)),
                     text,
                     tool_calls,
+                    cached_in=_openai_cached(usage),
                 )
                 log.debug("run %s call took %.1fs", info.run.id, time.monotonic() - started)
 
@@ -339,6 +347,7 @@ class Gateway:
                 text,
                 calls,
                 billed_in=billed,
+                cached_in=int(usage.get("cache_read_input_tokens") or 0),
             )
 
         if not payload.get("stream"):
@@ -392,6 +401,25 @@ def _normalize_claude(payload: dict[str, Any]) -> None:
     thinking = payload.get("thinking")
     if isinstance(thinking, dict) and thinking.get("type") in ("enabled", "disabled"):
         payload["thinking"] = {"type": "adaptive"}
+
+
+def new_prompt_tokens(prompt: int, previous: int, cached: int = 0) -> int:
+    """How much of a call's prompt the model hadn't already seen in this run.
+
+    An agent's conversation only grows between calls, so the new part is the growth
+    since the previous prompt; a smaller prompt means the agent compacted it, and all
+    of it is new. A server that reports how much of the prompt it served from cache
+    (`cached`) is believed when that says less is new.
+    """
+    new = prompt - previous if prompt >= previous else prompt
+    if cached > 0:
+        new = min(new, max(0, prompt - cached))
+    return max(0, new)
+
+
+def _openai_cached(usage: dict[str, Any]) -> int:
+    details = usage.get("prompt_tokens_details") or {}
+    return int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
 
 
 def _claude_usage(usage: dict[str, Any]) -> tuple[int, int, float]:
@@ -467,7 +495,7 @@ class _ClaudeStream:
 
 
 def _parse_sse_line(
-    line: bytes, content: list[str], calls: dict[int, dict[str, Any]], usage: dict[str, int]
+    line: bytes, content: list[str], calls: dict[int, dict[str, Any]], usage: dict[str, Any]
 ) -> None:
     text = line.decode(errors="replace").strip()
     if not text.startswith("data:"):
@@ -480,7 +508,7 @@ def _parse_sse_line(
     except json.JSONDecodeError:
         return
     if chunk.get("usage"):
-        usage.update({k: v for k, v in chunk["usage"].items() if isinstance(v, int)})
+        usage.update({k: v for k, v in chunk["usage"].items() if isinstance(v, int | dict) and v})
     for choice in chunk.get("choices") or []:
         delta = choice.get("delta") or {}
         if delta.get("content"):

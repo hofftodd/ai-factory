@@ -3,7 +3,8 @@
 Limits per task attempt (project ``watchdog`` setting overrides the defaults):
 
     max_requests     model calls an executor may make             (default 60)
-    max_tokens       prompt + completion tokens across those calls (default 400k)
+    max_tokens       new tokens across those calls: prompt the model had not
+                     already seen in this attempt, plus completions (default 400k)
     max_diff_lines   lines added + removed by one attempt          (default 800)
     repeat_limit     identical model responses before tripping     (default 3)
 
