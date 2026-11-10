@@ -266,9 +266,14 @@ async def test_a_failed_task_can_go_back_to_the_tester_with_a_note(client, origi
     assert client.post(f"/api/tasks/{done['id']}/send-back", json={}).status_code == 409
 
 
-# The Builder finds tests that can't all pass, and reports instead of working around them.
-CONFLICT = BUILDER + (
+# The Builder finds tests that can't all pass, and reports instead of working around them
+# (its code satisfies one side, so the suite fails).
+CONFLICT = "echo 'echo bye' > greet.sh\n" + (
     """echo 'check_greet contradicts check_old' > "$AI_FACTORY_RESULTS/tests-conflict.md"\n"""
+)
+# A Builder that gets everything green and still writes the file, to say there's no conflict.
+NO_CONFLICT_NOTE = BUILDER + (
+    """echo 'No conflicting tests found' > "$AI_FACTORY_RESULTS/tests-conflict.md"\n"""
 )
 
 
@@ -284,6 +289,18 @@ async def test_the_builder_reports_contradicting_tests_once(client, origin):
     # A second report in a row fails the attempt instead of another round.
     row = task(t["id"])
     assert row.state == TaskState.FAILED and "the tests contradict each other" in row.reason
+
+
+async def test_a_conflict_report_with_a_green_suite_is_ignored(client, origin):
+    p = make_project(client, origin)
+    t = add_task(client, p["id"], scripts(tester=MORE_TESTS, builder=NO_CONFLICT_NOTE))
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    assert task(t["id"]).state == TaskState.DONE
+    assert [r.step for r in runs_of(t["id"])] == ["tester", "builder"]
+    with session() as s:
+        texts = [e.message for e in s.exec(select(Event).where(Event.task_id == t["id"]))]
+    assert any("test-conflict report, but the whole suite passes" in m for m in texts)
+    assert not any(m.startswith("sent back to the Tester") for m in texts)
 
 
 # A runner that also runs the acceptance tests, as older projects' runners did.

@@ -445,7 +445,8 @@ def build_role_pack(
             "If another test contradicts this task's tests, so that both can never pass, do "
             "not work around it: never skip, deselect or special-case a test. Write which tests "
             "conflict and why into `$AI_FACTORY_RESULTS/tests-conflict.md` and finish; the task "
-            "goes back to the Tester.",
+            "goes back to the Tester. Only create that file for a real conflict: never to say "
+            "there is none. If the tests pass, just finish.",
             "",
         ]
     lines += KIND_NOTES.get(role, {}).get(task.kind, [])
