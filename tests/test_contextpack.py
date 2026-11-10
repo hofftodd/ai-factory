@@ -102,7 +102,10 @@ def test_pack_contents_and_budget(tmp_path):
     assert "Current `src/api.py`" in pack.text and "ROUTES = []" in pack.text
     assert pack.files == ["src/api.py"]
     # The executor's own prompt comes off the window first (pi is the default).
-    assert pack.budget == (32768 - 1500) * 35 // 100 and not pack.over_budget
+    from ai_factory.executors.pi import PiExecutor
+
+    overhead = PiExecutor.prompt_overhead_tokens
+    assert pack.budget == (32768 - overhead) * 35 // 100 and not pack.over_budget
     assert size_violations(project, task, pack, ["src/api.py"]) == []
 
 
@@ -155,6 +158,16 @@ def test_packs_show_the_toolchain_image(tmp_path):
         pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
         assert "## Toolchain image" in pack.text and "pytest --version" in pack.text
         assert "`.ai-factory/` is read-only to you" in pack.text
+
+
+def test_packs_point_agents_at_the_search_tools(tmp_path):
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T1", title="Add", req_refs=[])
+    for role in ("tester", "builder"):
+        pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
+        assert "## Finding your way" in pack.text
+        assert "`rg`" in pack.text and "`fd`" in pack.text and "`jq`" in pack.text
 
 
 def test_testers_see_how_the_project_runs_its_tests(tmp_path):

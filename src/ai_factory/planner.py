@@ -188,7 +188,8 @@ def unsaved_retry(text: str, out: ChatOutput) -> str:
 # What `.ai-factory/Dockerfile` builds on (docker/executor-base/Dockerfile). The
 # Environment Agent writes that file; this tells it what is already there.
 BASE_IMAGE = (
-    "`ai-factory/executor-base` is Ubuntu 24.04 with git, curl, bash and the coding agent, and "
+    "`ai-factory/executor-base` is Ubuntu 24.04 with git, curl, bash, ripgrep (`rg`), fd, jq "
+    "and the coding agent, and "
     "no language runtimes (no Node, no Python): the Dockerfile must install what the project "
     "needs. The base image ends with `USER agent`, so switch to `USER root` for apt-get and "
     "back to `USER agent` at the end."
