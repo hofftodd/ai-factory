@@ -372,3 +372,51 @@ def test_further_choices_are_saved_and_checked(client, origin):
         },
     )
     assert r.status_code == 400 and "node not found" in r.text
+
+
+def _queued(project_id: int, title: str, deps: list[int] | None = None) -> int:
+    with session() as s:
+        t = Task(
+            project_id=project_id,
+            title=title,
+            validation_cmd="true",
+            executor_script="true",
+            deps=deps or [],
+        )
+        s.add(t)
+        s.commit()
+        assert t.id is not None
+        return t.id
+
+
+def test_one_task_at_a_time_by_default(client, origin):
+    p = make_project(client, origin)
+    for title in ("a", "b", "c"):
+        _queued(p["id"], title)
+    assert len(pick_ready()) == 1
+
+
+def test_parallel_tasks_start_side_by_side(client, origin):
+    p = make_project(client, origin, max_parallel_tasks=2)
+    a = _queued(p["id"], "a")
+    b = _queued(p["id"], "b")
+    _queued(p["id"], "c")
+    assert [t.id for t, _, _ in pick_ready()] == [a, b]  # never more than the limit
+
+
+def test_parallel_tasks_still_wait_for_their_dependencies(client, origin):
+    p = make_project(client, origin, max_parallel_tasks=3)
+    a = _queued(p["id"], "a")
+    _queued(p["id"], "after a", deps=[a])
+    c = _queued(p["id"], "c")
+    assert [t.id for t, _, _ in pick_ready()] == [a, c]
+
+
+def test_running_tasks_count_against_the_limit(client, origin):
+    p = make_project(client, origin, max_parallel_tasks=2)
+    with session() as s:
+        s.add(Task(project_id=p["id"], title="busy", state=TaskState.RUNNING))
+        s.commit()
+    first = _queued(p["id"], "a")
+    _queued(p["id"], "b")
+    assert [t.id for t, _, _ in pick_ready()] == [first]

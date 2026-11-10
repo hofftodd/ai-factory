@@ -626,11 +626,54 @@ class TaskRunner:
                 task_id=self.task_id,
             )
             return
-        try:
-            await asyncio.to_thread(merge_task, self.task_id)
-        except gitops.GitError as e:
-            raise StepFailed(str(e), kind="merge") from e
+        async with merge_lock(task.project_id):
+            await self._catch_up(project, task)
+            try:
+                await asyncio.to_thread(merge_task, self.task_id)
+            except gitops.GitError as e:
+                raise StepFailed(str(e), kind="merge") from e
         finish_run(self.run_id, RunState.SUCCEEDED)
+
+    async def _catch_up(self, project: Project, task: Task) -> None:
+        """Before merging: if other tasks merged since this one last synced (tasks run in
+        parallel), bring their work in and run the whole suite again, so two tasks that
+        pass on their own can't break the branch together."""
+        clone = gitops.task_dir(task.project_id, self.task_id)
+        try:
+            merged = await asyncio.to_thread(
+                gitops.sync_task_clone, task.project_id, self.task_id, project.milestone_branch
+            )
+        except gitops.MergeConflict as e:
+            raise StepFailed(
+                f"the task's work conflicts with work merged into {project.milestone_branch} "
+                f"while it ran, in {', '.join(e.files) or 'some files'}",
+                kind="conflict",
+            ) from e
+        if not merged or not self._suite_cmd(clone):
+            return
+        self._emit(
+            "system",
+            f"brought in work merged into {project.milestone_branch} meanwhile; "
+            "running the suite again before merging",
+        )
+        task_tests = [
+            f
+            for f in gitops.changed_since(clone, gitops.BASE_REF)
+            if roles.is_test_path(project, f)
+        ]
+        result = await self._run_suite(project, clone, "builder", task_tests, base=gitops.BASE_REF)
+        if result is None:
+            return
+        run, code = result
+        failing = run.failed + run.errors
+        if run.problem or code != 0 or failing:
+            raise StepFailed(
+                f"tests fail after bringing in work merged into {project.milestone_branch} "
+                f"while this task ran: {failing} of {run.passed + failing} failed"
+                + (f" ({run.problem})" if run.problem else ""),
+                "\n".join(self._tail),
+                kind="validation",
+            )
 
     # -- agent tasks: Tester -> Builder -> verify -----------------------------------
 
@@ -1165,6 +1208,15 @@ class TaskRunner:
                 lines += ["", "The user's note:"]
             lines.append(back.message.strip())
         return "\n".join(lines).strip()
+
+
+_MERGE_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def merge_lock(project_id: int) -> asyncio.Lock:
+    """One merge into a project's milestone branch at a time (tasks may run in parallel;
+    the main clone is a single working tree)."""
+    return _MERGE_LOCKS.setdefault(project_id, asyncio.Lock())
 
 
 def merge_task(task_id: int) -> None:

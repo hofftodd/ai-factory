@@ -50,6 +50,7 @@ export interface Project {
   spend_usd: number;
   spend_cap_usd: number;
   min_task_coverage: number;
+  max_parallel_tasks: number;
   test_note: string;
   test_paths: string[];
   coverage?: number | null;

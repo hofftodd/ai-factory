@@ -36,7 +36,7 @@ def send_back_to_tester(
 
 async def handle(gate: Gate) -> None:
     from ai_factory.orchestrator import escalation, milestone, replan
-    from ai_factory.orchestrator.runner import merge_task
+    from ai_factory.orchestrator.runner import merge_lock, merge_task
 
     approved = gate.state == GateState.APPROVED
     assert gate.id is not None
@@ -44,7 +44,8 @@ async def handle(gate: Gate) -> None:
         if gate.kind == GateKind.TASK_MERGE and gate.task_id is not None:
             if approved:
                 try:
-                    await asyncio.to_thread(merge_task, gate.task_id)
+                    async with merge_lock(gate.project_id):
+                        await asyncio.to_thread(merge_task, gate.task_id)
                 except gitops.GitError as e:
                     transition(
                         gate.task_id,
@@ -62,7 +63,8 @@ async def handle(gate: Gate) -> None:
         elif gate.kind == GateKind.COVERAGE and gate.task_id is not None:
             if approved:  # merge anyway
                 try:
-                    await asyncio.to_thread(merge_task, gate.task_id)
+                    async with merge_lock(gate.project_id):
+                        await asyncio.to_thread(merge_task, gate.task_id)
                 except gitops.GitError as e:
                     transition(
                         gate.task_id,

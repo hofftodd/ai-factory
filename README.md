@@ -73,7 +73,8 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
    start. Every agent of every task works in that one image, and none of
    them can change it; *Rebuild environment* on the project runs the agent
    again if something turns out to be missing.
-6. **Execute, autonomously.** Tasks run one at a time per project in Docker
+6. **Execute, autonomously.** Tasks run one at a time per project (or
+   several independent ones at once, a project setting) in Docker
    containers built from `ubuntu:24.04`, using [pi](https://pi.dev) as the
    coding agent (or OpenCode or Aider, per project or task). pi's own prompt
    is about 1.4k tokens against OpenCode's 7.4k, and context packs are sized

@@ -169,6 +169,9 @@ Design changes made while building M1 (spec updated where relevant):
   touches another ai-factory installation's containers on the same host.
 - **One active task per project** in M1 (tasks merge into one milestone
   branch); parallelism comes from multiple projects and node capacity.
+  Later: `Project.max_parallel_tasks` (default 1) lets independent tasks run
+  side by side; merges take `runner.merge_lock`, and `_catch_up` re-syncs and
+  re-runs the suite before merging when the branch moved.
 - **Scope fence implemented early** (it was planned for M3): changes outside a
   task's allowed globs fail the task.
 
@@ -469,7 +472,7 @@ context budget is now `pct × (window − overhead)`.
   spend on such servers is approximate.
 - Regression detection is exit-code based.
 - Aider has only been exercised with the scripted test setup, not real models.
-- Projects still run one task at a time each; parallelism comes from running
+- Projects run one task at a time each by default (see `max_parallel_tasks`); parallelism also comes from running
   several projects across nodes.
 - GitHub Issues integration remains a future enhancement (spec §9).
 

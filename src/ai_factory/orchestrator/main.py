@@ -4,7 +4,8 @@ Scheduling rules:
 - nothing starts while E-stop is active;
 - a paused project, or a task on hold, never starts;
 - a task starts only when all its dependencies are done;
-- at most one active task per project (tasks merge into one milestone branch);
+- at most `max_parallel_tasks` active tasks per project (default 1); their merges into
+  the milestone branch happen one at a time (runner.merge_lock);
 - a node never runs more work (task attempts plus planner calls) than its capacity,
   and a node that failed its last health check gets none;
 - paid (priced) nodes get no work for a project at its spend cap;
@@ -232,7 +233,14 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             )
         }
     by_id = {t.id: t for t in tasks}
-    busy_projects = {t.project_id for t in tasks if t.state in ACTIVE_STATES}
+    active: dict[int, int] = {}
+    for t in tasks:
+        if t.state in ACTIVE_STATES:
+            active[t.project_id] = active.get(t.project_id, 0) + 1
+
+    def full(p: Project) -> bool:
+        return active.get(p.id or 0, 0) >= max(1, p.max_parallel_tasks)
+
     load = node_load()
     busy_models = residency.in_use()
     planned: dict[str, set[str]] = {}
@@ -245,7 +253,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             continue
         if p.phase != ProjectPhase.EXECUTE:
             continue
-        if t.project_id in busy_projects or t.project_id in stopping_projects:
+        if full(p) or t.project_id in stopping_projects:
             continue
         if t.project_id in reviewing:
             continue
@@ -270,7 +278,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
     candidates.sort(key=lambda c: not warm(c))
     ready = []
     for t, p, needs_node, options in candidates:
-        if t.project_id in busy_projects:
+        if full(p):
             continue
         nid, model = options[0]
         if needs_node and nid is not None:
@@ -291,7 +299,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             n = nodes[nid]
             load[nid] = load.get(nid, 0) + 1
             residency.reserve(planned, n, model)
-        busy_projects.add(t.project_id)
+        active[t.project_id] = active.get(t.project_id, 0) + 1
         ready.append((t, nid, model))
     return ready
 
