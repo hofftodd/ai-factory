@@ -26,6 +26,7 @@ from ai_factory.core.models import (
 )
 from ai_factory.db import session
 from ai_factory.orchestrator.main import Orchestrator
+from tests.conftest import git
 from tests.helpers import TERMINAL, drive, make_project, task
 
 RUN_SH = r"""out="${AI_FACTORY_RESULTS:-/tmp}"
@@ -362,6 +363,26 @@ async def test_parallel_tasks_editing_the_same_file_conflict_instead_of_merging(
     row = task(b["id"])
     assert row.state == TaskState.FAILED and "conflicts with work merged" in row.reason
     assert (gitops.repo_dir(p["id"]) / "shared.txt").read_text() == "A\n"
+
+
+async def test_bytecode_the_project_tracks_trips_no_role_check(client, origin, tmp_path):
+    """future-lab's branch tracked __pycache__/*.pyc. Running code rewrites them, and a
+    task clone stops tracking them; neither is the Tester's (or anyone's) change."""
+    seed = tmp_path / "pyc-seed"
+    git("clone", "-q", str(origin), str(seed), cwd=tmp_path)
+    (seed / "src" / "__pycache__").mkdir()
+    (seed / "src" / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00old")
+    git("add", "-A", cwd=seed)
+    git("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", "pyc", cwd=seed)
+    git("push", "-q", "origin", "HEAD:main", cwd=seed)
+    p = make_project(client, origin)
+    touch = "printf '\\001new' > src/__pycache__/app.cpython-312.pyc\n"  # as python would
+    t = add_task(client, p["id"], scripts(tester=TESTER + touch, builder=BUILDER + touch))
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.DONE, row.reason
+    repo = gitops.repo_dir(p["id"])
+    assert not [f for f in git("ls-files", cwd=repo).split() if "__pycache__" in f]
 
 
 # A runner that also runs the acceptance tests, as older projects' runners did.

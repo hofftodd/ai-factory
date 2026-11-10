@@ -258,10 +258,13 @@ def _read(*args: str, cwd: Path) -> str:
 
 
 def changed_files(path: Path) -> list[str]:
-    """Files changed in the task clone (committed or not) since the task started."""
+    """Files changed in the task clone (committed or not) since the task started.
+    Generated files (GENERATED) are left out: running code rewrites them, and a clone
+    that stops tracking ones its base still tracks shows them as deleted; neither is
+    anyone's change, so no role check, size check or test list should see them."""
     out = _read("diff", "--name-only", BASE_REF, cwd=path)
     untracked = _read("ls-files", "--others", "--exclude-standard", cwd=path)
-    return sorted({f for f in (out + untracked).splitlines() if f})
+    return sorted({f for f in (out + untracked).splitlines() if f and not is_generated(f)})
 
 
 def head(path: Path) -> str:
@@ -273,8 +276,9 @@ def has_commit(path: Path, sha: str) -> bool:
 
 
 def changed_since(path: Path, base: str) -> list[str]:
-    """Files changed between `base` and HEAD."""
-    return sorted(f for f in _read("diff", "--name-only", base, "HEAD", cwd=path).splitlines() if f)
+    """Files changed between `base` and HEAD, generated files left out (changed_files)."""
+    out = _read("diff", "--name-only", base, "HEAD", cwd=path).splitlines()
+    return sorted(f for f in out if f and not is_generated(f))
 
 
 def file_at(path: Path, ref: str, rel: str) -> str | None:
@@ -300,7 +304,9 @@ def diff_size(path: Path, base: str = BASE_REF) -> int:
     """Lines added + removed since `base` (the task start by default; committed changes)."""
     total = 0
     for line in _read("diff", "--numstat", base, cwd=path).splitlines():
-        added, removed, *_ = line.split("\t")
+        added, removed, *rest = line.split("\t")
+        if rest and is_generated(rest[-1]):
+            continue
         if added.isdigit() and removed.isdigit():  # "-" for binary files
             total += int(added) + int(removed)
     return total
