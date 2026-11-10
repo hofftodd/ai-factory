@@ -204,3 +204,16 @@ def test_real_conflicts_are_still_refused(origin, tmp_path):
     with pytest.raises(gitops.MergeConflict) as e:
         gitops.sync_task_clone(1, 2, "ai-factory/m1")
     assert e.value.files == ["src/app.py"]
+
+
+def test_change_lists_leave_generated_files_out(origin, tmp_path):
+    _with_tracked_bytecode(origin, tmp_path)
+    gitops.clone_project(1, str(origin), "ai-factory/m1")
+    clone = gitops.prepare_task_clone(1, 7, "ai-factory/m1")
+    (clone / "src" / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00new")
+    (clone / "src" / "app.py").write_text("VALUE = 2\n")
+    assert gitops.changed_files(clone) == ["src/app.py"]
+    gitops.commit_all(clone, "task 7")  # also stops tracking the bytecode
+    assert gitops.changed_since(clone, gitops.BASE_REF) == ["src/app.py"]
+    assert gitops.changed_files(clone) == ["src/app.py"]
+    assert gitops.diff_size(clone) == 2  # VALUE = 1 -> VALUE = 2
