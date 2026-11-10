@@ -5,8 +5,10 @@
       -> the escalation model         (role binding "escalation"; up to max_retries)
       -> blocked: an inbox item lets the user retry or discard
 
-A configuration problem, or work that conflicts with the milestone branch, blocks
-immediately: retrying can't fix either. A context pack that is too big
+A configuration problem blocks immediately: retrying can't fix it. Work that conflicts
+with the milestone branch goes back to its Builder with the conflicts marked; it blocks
+only when the Builder can't resolve it (it left markers, or the conflict is in files it
+may not edit, such as tests). A context pack that is too big
 goes straight to splitting. The same failure signature `repeat_limit` times in
 a row ends the retries at the current level early.
 """
@@ -116,6 +118,13 @@ def after_failure(task_id: int, run_id: int) -> Decision | None:
         if run.failure_kind == "budget":
             # Not the task's fault: it runs again once the spend cap is raised.
             d = Decision("retry", "waiting for the spend cap to be raised")
+            emit(project.id, task_id, "watchdog", f"escalation: retry ({d.reason})", action="retry")
+            transition(task_id, (TaskState.FAILED,), TaskState.QUEUED, d.reason)
+            return d
+        if run.failure_kind == "behind":
+            # Not the task's fault either: other work merged first. The next attempt
+            # merges it with the conflicts marked and the Builder resolves them.
+            d = Decision("retry", "work merged meanwhile conflicts; the Builder resolves it")
             emit(project.id, task_id, "watchdog", f"escalation: retry ({d.reason})", action="retry")
             transition(task_id, (TaskState.FAILED,), TaskState.QUEUED, d.reason)
             return d

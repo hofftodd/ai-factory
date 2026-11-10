@@ -193,7 +193,9 @@ Everything lives under the data directory (`./data` by default):
    Docker, no images: with the local runtime this step is skipped.)
 5. **Execute.** Tasks run in dependency order, one at a time per project
    unless the project allows more (*Tasks at once*): then independent tasks run
-   side by side. Their merges into the milestone branch stay one at a time, and
+   side by side, except that tasks citing requirements from the same area
+   (`FR-2.1` and `FR-2.4` are both `FR-2`) don't run at the same time, since they
+   tend to edit the same files. Their merges into the milestone branch stay one at a time, and
    a task that finishes after others merged brings their work in and runs the
    whole suite again first; a red suite or a conflict sends it back, so two
    tasks that pass on their own can't break the branch together. Several
@@ -220,8 +222,12 @@ Tester from its criteria.
    toolchain image is built. A later attempt reuses the clone, keeping the
    work so far, and first merges in whatever other tasks have merged since,
    so the task builds on the latest code and its own merge stays clean. If
-   its work conflicts with theirs, retrying can't help: the task is blocked
-   at once and the inbox asks you to start it over or resolve the conflict.
+   its work conflicts with theirs, the merge is committed with the conflict
+   markers in place and the Builder's briefing says to resolve them first,
+   keeping both sides' intent; the attempt fails if any markers are left. Only a
+   conflict the Builder can't take on (its tests aren't written yet, or a
+   conflicted file is a test, test configuration or `.ai-factory/` file) blocks
+   the task at once, and the inbox asks you to start it over or resolve it.
 2. **Tester step.** The Tester gets a briefing (the task's goal and criteria,
    the requirements it covers, the relevant part of the design, an outline
    of the code, the existing tests) and writes tests for the task. ai-factory

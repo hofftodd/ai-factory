@@ -195,6 +195,7 @@ class TaskRunner:
         self._tail: list[str] = []
         self.image = ""  # set once the attempt's toolchain image is ready
         self.acceptance_in_suite = 0  # acceptance test cases the last suite run included
+        self.conflicted: list[str] = []  # files merged with conflict markers for the Builder
         self.settings = get_settings()
         self.run_dir = self.settings.runs_dir / str(run_id)
         with session() as s:
@@ -464,15 +465,53 @@ class TaskRunner:
                 gitops.sync_task_clone, task.project_id, self.task_id, project.milestone_branch
             )
         except gitops.MergeConflict as e:
-            raise StepFailed(
-                f"the task's work conflicts with {project.milestone_branch} "
-                f"in {', '.join(e.files) or 'some files'}",
-                kind="conflict",
-            ) from e
+            if not self._builder_can_resolve(task, project, e.files):
+                raise StepFailed(
+                    f"the task's work conflicts with {project.milestone_branch} "
+                    f"in {', '.join(e.files) or 'some files'}",
+                    kind="conflict",
+                ) from e
+            self.conflicted = await asyncio.to_thread(
+                gitops.merge_keeping_conflicts,
+                task.project_id,
+                self.task_id,
+                project.milestone_branch,
+            )
+            self._emit(
+                "system",
+                f"brought in the latest {project.milestone_branch}; it conflicts in "
+                f"{', '.join(self.conflicted)}, which the Builder resolves",
+                files=self.conflicted,
+            )
+            merged = True
         if merged:
             self._emit("system", f"brought in the latest {project.milestone_branch}")
             if task.tests_ready:  # the Builder's diff starts after the merge
                 self._update_task(tests_commit=gitops.head(clone))
+
+    def _builder_can_resolve(self, task: Task, project: Project, files: list[str]) -> bool:
+        """Whether a merge conflict in `files` can go to the task's Builder: its tests are
+        written, a Builder step follows, and every file is one the Builder may edit."""
+        if not task.tests_ready or task.no_build or task.kind in ("acceptance", "setup"):
+            return False
+        try:
+            if not uses_pipeline(task, get_executor(resolve_executor(project, task)[0])):
+                return False
+        except ValueError:
+            return False
+        return bool(files) and not any(
+            roles.is_test_path(project, f) or roles.is_env_path(f) or roles.is_test_config(f)
+            for f in files
+        )
+
+    def _conflict_brief(self) -> str:
+        return (
+            "Work another task merged into the milestone branch conflicts with this task's "
+            "work. These files were committed with git conflict markers (<<<<<<<, =======, "
+            f">>>>>>>) still in them: {', '.join(self.conflicted)}. Resolve every conflict "
+            "first, keeping what both sides meant to do: the other task's work is already "
+            "merged and its tests must keep passing. Then make this task's tests pass."
+        )
 
     async def _agent_setup(
         self, project: Project, task: Task, role: str, executor: Executor
@@ -644,10 +683,12 @@ class TaskRunner:
                 gitops.sync_task_clone, task.project_id, self.task_id, project.milestone_branch
             )
         except gitops.MergeConflict as e:
+            # The next attempt merges with the markers kept and the Builder resolves them.
+            resolvable = self._builder_can_resolve(task, project, e.files)
             raise StepFailed(
                 f"the task's work conflicts with work merged into {project.milestone_branch} "
                 f"while it ran, in {', '.join(e.files) or 'some files'}",
-                kind="conflict",
+                kind="behind" if resolvable else "conflict",
             ) from e
         if not merged or not self._suite_cmd(clone):
             return
@@ -798,7 +839,14 @@ class TaskRunner:
             test_paths=test_paths,
             task_tests=task_tests,
             context_window=node.context_window if node else None,
-            previous_failure=self._previous_failure(),
+            previous_failure="\n\n".join(
+                x
+                for x in (
+                    self._conflict_brief() if role == roles.BUILDER and self.conflicted else "",
+                    self._previous_failure(),
+                )
+                if x
+            ),
             sent_back=self._sent_back(project, clone) if role == roles.TESTER else "",
             failing_acceptance=self._failing_acceptance(task),
         )
@@ -931,6 +979,13 @@ class TaskRunner:
         task_tests = gitops.changed_since(clone, gitops.BASE_REF)
         task_tests = [f for f in task_tests if roles.is_test_path(project, f)]
         changed = await self._agent(roles.BUILDER, project, clone, executor, task_tests)
+        if self.conflicted:
+            left = gitops.conflict_markers(clone, self.conflicted)
+            if left:
+                raise StepFailed(
+                    f"the Builder left conflict markers in {', '.join(left)}", kind="conflict"
+                )
+            self._emit("system", "the Builder resolved the merge conflicts")
         report = self.run_dir / "results" / f"{roles.BUILDER}-agent" / CONFLICT_REPORT
         # A conflict report only counts if the tests then fail: a Builder that got the suite
         # green has, by definition, found no tests that can't both pass (models sometimes

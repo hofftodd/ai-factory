@@ -214,6 +214,12 @@ def choose_node(
     return None, None
 
 
+def req_areas(task: Task) -> set[str]:
+    """The requirement areas a task cites: "FR-2" for "FR-2.4". Undotted ids (NFR-3,
+    AC-18) are cross-cutting and left out."""
+    return {r.split(".")[0] for r in task.req_refs or [] if "." in r}
+
+
 def pick_ready() -> list[tuple[Task, int | None, str]]:
     """Ready tasks in id order with their resolved (node_id, model)."""
     with session() as s:
@@ -234,9 +240,13 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
         }
     by_id = {t.id: t for t in tasks}
     active: dict[int, int] = {}
+    # Tasks in one requirement area tend to edit the same files, and parallel tasks that
+    # do conflict at merge time; so a project runs one task per area at a time.
+    busy_areas: dict[int, set[str]] = {}
     for t in tasks:
         if t.state in ACTIVE_STATES:
             active[t.project_id] = active.get(t.project_id, 0) + 1
+            busy_areas.setdefault(t.project_id, set()).update(req_areas(t))
 
     def full(p: Project) -> bool:
         return active.get(p.id or 0, 0) >= max(1, p.max_parallel_tasks)
@@ -282,7 +292,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
     candidates.sort(key=lambda c: not warm(c))
     ready = []
     for t, p, needs_node, options in candidates:
-        if full(p):
+        if full(p) or req_areas(t) & busy_areas.get(t.project_id, set()):
             continue
         nid, model = options[0]
         if needs_node and nid is not None:
@@ -304,6 +314,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             load[nid] = load.get(nid, 0) + 1
             residency.reserve(planned, n, model)
         active[t.project_id] = active.get(t.project_id, 0) + 1
+        busy_areas.setdefault(t.project_id, set()).update(req_areas(t))
         ready.append((t, nid, model))
     return ready
 

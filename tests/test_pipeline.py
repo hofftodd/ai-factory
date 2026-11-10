@@ -340,7 +340,7 @@ async def test_parallel_tasks_that_break_each_other_are_caught_before_merging(cl
     assert (repo / "a.txt").exists() and not (repo / "b.txt").exists()
 
 
-async def test_parallel_tasks_editing_the_same_file_conflict_instead_of_merging(client, origin):
+def _same_file_tasks(client, origin, b_builder: str):
     p = make_project(client, origin, max_parallel_tasks=2)
     a = add_task(
         client,
@@ -351,17 +351,38 @@ async def test_parallel_tasks_editing_the_same_file_conflict_instead_of_merging(
     b = add_task(
         client,
         p["id"],
-        scripts(
-            tester=_check("b", "grep -q B shared.txt"),
-            builder="sleep 3\necho B > shared.txt",
-        ),
+        scripts(tester=_check("b", "grep -q B shared.txt"), builder=b_builder),
         title="B",
     )
+    return p, a, b
+
+
+async def test_parallel_tasks_editing_the_same_file_go_back_to_the_builder(client, origin):
+    """B conflicts with A, which merged while B ran: B's next attempt merges A's work with
+    the conflicts marked, and its Builder resolves them instead of B starting over."""
+    resolve = "sleep 3\nprintf 'A\\nB\\n' > shared.txt"
+    p, a, b = _same_file_tasks(client, origin, resolve)
     orch = Orchestrator()
     await drive(orch, lambda: {task(a["id"]).state, task(b["id"]).state} <= TERMINAL, timeout=90)
     assert task(a["id"]).state == TaskState.DONE
-    row = task(b["id"])
-    assert row.state == TaskState.FAILED and "conflicts with work merged" in row.reason
+    assert task(b["id"]).state == TaskState.DONE, task(b["id"]).reason
+    assert [r.failure_kind for r in runs_of(b["id"]) if r.failure_kind] == ["behind"]
+    assert [r.step for r in runs_of(b["id"])][-1] == "builder"  # no new Tester run
+    texts = [e.message for e in events(b["id"], "system")]
+    assert any("which the Builder resolves" in m for m in texts)
+    assert any("the Builder resolved the merge conflicts" in m for m in texts)
+    assert (gitops.repo_dir(p["id"]) / "shared.txt").read_text() == "A\nB\n"
+
+
+async def test_a_builder_that_leaves_conflict_markers_asks_the_user(client, origin):
+    # The Builder only appends, so the markers stay.
+    p, a, b = _same_file_tasks(client, origin, "sleep 3\necho B >> shared.txt")
+    client.patch(f"/api/projects/{p['id']}", json={"watchdog": {"escalation": True}})
+    orch = Orchestrator()
+    await drive(orch, lambda: task(b["id"]).state == TaskState.BLOCKED, timeout=90)
+    last = runs_of(b["id"])[-1]
+    assert last.failure_kind == "conflict"
+    assert "left conflict markers in shared.txt" in last.reason
     assert (gitops.repo_dir(p["id"]) / "shared.txt").read_text() == "A\n"
 
 
