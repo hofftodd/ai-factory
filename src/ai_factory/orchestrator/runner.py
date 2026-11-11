@@ -177,6 +177,25 @@ def store_results(
     return run
 
 
+# An agent step's timeout grows by the task's timeout for each earlier run of that role
+# that timed out, up to this many times the task's timeout.
+MAX_TIMEOUT_FACTOR = 3
+# Sourced before every agent step when the project has it: starts the services the tests
+# need (a database...) and exports how to reach them. See contextpack.SERVICES_CONTRACT.
+SERVICES_SCRIPT = "tests/services.sh"
+
+
+def with_services(command: list[str]) -> list[str]:
+    """`command`, run after sourcing tests/services.sh when the workspace has one, so the
+    agent's shell inherits the services' variables (DATABASE_URL...)."""
+    script = (
+        f'if [ -f {SERVICES_SCRIPT} ]; then echo "ai-factory: starting {SERVICES_SCRIPT}"; '
+        f'. ./{SERVICES_SCRIPT} || echo "ai-factory: {SERVICES_SCRIPT} failed"; fi; '
+        'exec "$@"'
+    )
+    return ["sh", "-c", script, "sh", *command]
+
+
 class TaskRunner:
     def __init__(
         self,
@@ -824,6 +843,30 @@ class TaskRunner:
         self.run_dir = self.settings.runs_dir / str(self.run_id)
         (self.run_dir / "ctl").mkdir(parents=True, exist_ok=True)
 
+    def _agent_timeout(self, task: Task, role: str) -> float:
+        """The task's timeout, once more for each earlier run of this role on the task that
+        timed out (MAX_TIMEOUT_FACTOR at most): a task that needs longer gets longer,
+        instead of failing the same way again on every model."""
+        with session() as s:
+            timed_out = len(
+                s.exec(
+                    select(TaskRun.id).where(
+                        TaskRun.task_id == self.task_id,
+                        TaskRun.step == role,
+                        col(TaskRun.id) != self.run_id,
+                        col(TaskRun.reason).contains(f"{role} timed out after"),
+                    )
+                ).all()
+            )
+        factor = min(1 + timed_out, MAX_TIMEOUT_FACTOR)
+        if factor > 1:
+            self._emit(
+                "system",
+                f"{roles.ROLES[role].name} gets {factor}x the timeout "
+                f"({int(task.timeout_s * factor)}s): {timed_out} earlier run(s) timed out",
+            )
+        return task.timeout_s * factor
+
     async def _agent(
         self, role: str, project: Project, clone: Path, executor: Executor, task_tests: list[str]
     ) -> list[str]:
@@ -881,7 +924,13 @@ class TaskRunner:
         else:
             mounts |= {"readonly_dirs": [*test_paths, roles.ENV_DIR]}
         code = await self._step(
-            role, inv.command, inv.env, "log", task.timeout_s, output=inv.output, **mounts
+            role,
+            with_services(inv.command),
+            inv.env,
+            "log",
+            self._agent_timeout(task, role),
+            output=inv.output,
+            **mounts,
         )
         task = self._check()
         await asyncio.to_thread(

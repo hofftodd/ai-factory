@@ -197,3 +197,49 @@ async def test_recover_marks_orphaned_runs_failed(client, origin):
         assert s.get(Task, t["id"]).state == TaskState.FAILED
     (run,) = _runs(t["id"])
     assert run.state == RunState.INTERRUPTED
+
+
+def test_agent_commands_source_the_services_script(tmp_path):
+    import subprocess
+
+    from ai_factory.orchestrator.runner import with_services
+
+    command = with_services(["sh", "-c", 'echo "url=$DATABASE_URL"'])
+    out = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True).stdout
+    assert out.strip() == "url="  # no services script: the command just runs
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "services.sh").write_text("export DATABASE_URL=postgres://db\n")
+    out = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True).stdout
+    assert "url=postgres://db" in out
+
+
+async def test_an_agent_that_timed_out_gets_longer(client, origin):
+    from ai_factory.core.models import Task
+    from ai_factory.orchestrator.runner import MAX_TIMEOUT_FACTOR, TaskRunner
+
+    p = make_project(client, origin)
+    t = make_task(client, p["id"], script="true", timeout_s=100)
+
+    def run(step: str, reason: str) -> int:
+        with session() as s:
+            r = TaskRun(task_id=t["id"], project_id=p["id"], step=step, reason=reason)
+            s.add(r)
+            s.commit()
+            assert r.id is not None
+            return r.id
+
+    def timeout(role: str) -> float:
+        runner = TaskRunner(t["id"], run(role, ""))
+        with session() as s:
+            row = s.get(Task, t["id"])
+            assert row is not None
+            return runner._agent_timeout(row, role)
+
+    assert timeout("builder") == 100
+    run("builder", "builder timed out after 100s")
+    run("tester", "tester timed out after 100s")
+    run("builder", "tests failed")
+    assert timeout("builder") == 200 and timeout("tester") == 200
+    for _ in range(5):
+        run("builder", "builder timed out after 200s")
+    assert timeout("builder") == 100 * MAX_TIMEOUT_FACTOR
