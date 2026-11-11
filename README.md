@@ -111,8 +111,10 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      node has a capacity shared by task steps and planning calls, and is
      health-checked every minute; work waits for a free slot on a healthy
      node. The Tester and Builder can each have several models, in order of
-     preference: each step goes to the first with a free slot (a model that's
-     already loaded before one that must load), so one project can keep
+     preference: each step goes to the first with a free slot. A loaded model
+     is preferred over one that must load only when loading it would push out
+     a model some project's roles use; otherwise the first choice loads, so an
+     idle unload doesn't leave it on the fallback for good. One project can keep
      several machines busy.
    - **Watchdog.** Coding agents reach their model only through ai-factory's
      *model gateway*, which counts calls and tokens against per-step

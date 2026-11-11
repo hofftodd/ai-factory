@@ -21,6 +21,7 @@ import contextlib
 import logging
 import signal
 import time
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 from sqlmodel import col, select
@@ -188,14 +189,16 @@ def choose_node(
     busy: dict[tuple[str, str], str],
     project: Project,
     planned: dict[str, set[str]] | None = None,
+    wanted: AbstractSet[tuple[str, str]] = frozenset(),
 ) -> tuple[tuple[int, str] | None, tuple[int, str, str] | None]:
     """Where a coding agent runs, from its ``options`` in order of preference.
 
     (choice, None): the first option with a free slot whose model starts without swapping
-    out one in use, an already loaded model before one that must load. (None, (node, model,
+    out one in use and is loaded or would push out no model in ``wanted`` (those bound to
+    some project's roles); failing that, a loaded one, else the first. (None, (node, model,
     why)): every free option would swap; the first of them, to wait for. (None, None): no
     option has a free slot."""
-    free: list[tuple[int, str, str, bool]] = []
+    free: list[tuple[int, str, str, bool, bool]] = []
     for nid, model in options:
         n = nodes.get(nid)
         if nid is None or n is None or not node_available(n, load):
@@ -203,13 +206,15 @@ def choose_node(
         if spend.priced(n) and spend.over_cap(project):
             continue
         reason = residency.blocker(n, model, busy, planned)
-        free.append((nid, model, reason, residency.warm(n, model)))
+        warm = residency.warm(n, model)
+        cheap = warm or not residency.displaces(n, model, wanted, planned)
+        free.append((nid, model, reason, warm, cheap))
     ok = [f for f in free if not f[2]]
     if ok:
-        nid, model, _, _ = next((f for f in ok if f[3]), ok[0])
+        nid, model, *_ = next((f for f in ok if f[4]), next((f for f in ok if f[3]), ok[0]))
         return (nid, model), None
     if free:
-        nid, model, reason, _ = free[0]
+        nid, model, reason, *_ = free[0]
         return None, (nid, model, reason)
     return None, None
 
@@ -253,6 +258,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
 
     load = node_load()
     busy_models = residency.in_use()
+    wanted = residency.bound_models(projects.values(), nodes)
     planned: dict[str, set[str]] = {}
     max_wait = get_settings().swap_wait_s
 
@@ -297,7 +303,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
         nid, model = options[0]
         if needs_node and nid is not None:
             assert t.id is not None
-            pick, blocked = choose_node(options, nodes, load, busy_models, p, planned)
+            pick, blocked = choose_node(options, nodes, load, busy_models, p, planned, wanted)
             if pick is None and blocked is None:
                 continue  # no free slot on any of its nodes
             if pick is not None:

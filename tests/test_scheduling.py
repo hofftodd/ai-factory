@@ -331,7 +331,9 @@ async def test_work_goes_to_the_first_node_with_a_free_slot(client, origin):
     assert [(nid, m) for _, nid, m in pick_ready()] == [(a["id"], "m1")]
 
 
-async def test_a_loaded_model_is_preferred_over_list_order(client, origin, monkeypatch):
+async def test_a_loaded_model_beats_list_order_when_loading_would_displace(
+    client, origin, monkeypatch
+):
     from ai_factory import residency
 
     a = add_node(client, name="a", capacity=1)
@@ -339,7 +341,12 @@ async def test_a_loaded_model_is_preferred_over_list_order(client, origin, monke
     p = builder_on(client, origin, a, b)
     make_task(client, p["id"], script="")
     monkeypatch.setattr(residency, "warm", lambda n, m: n is not None and n.name == "b")
+    # Loading the first choice would push out a model some project's roles use.
+    monkeypatch.setattr(residency, "displaces", lambda *a, **k: True)
     assert [nid for _, nid, _ in pick_ready()] == [b["id"]]
+    # If it would push out only models nothing uses, the first choice loads.
+    monkeypatch.setattr(residency, "displaces", lambda *a, **k: False)
+    assert [nid for _, nid, _ in pick_ready()] == [a["id"]]
 
 
 async def test_an_escalated_task_keeps_its_one_node(client, origin):

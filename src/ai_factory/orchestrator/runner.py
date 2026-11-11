@@ -786,7 +786,13 @@ class TaskRunner:
                 nodes = {n.id: n for n in s.exec(select(Node).where(col(Node.id).in_(ids)))}
             if not nodes:
                 break
-            pick, blocked = choose_node(options, nodes, node_load(), residency.in_use(), project)
+            with session() as s:
+                wanted = residency.bound_models(
+                    s.exec(select(Project)).all(), {n.id: n for n in s.exec(select(Node))}
+                )
+            pick, blocked = choose_node(
+                options, nodes, node_load(), residency.in_use(), project, wanted=wanted
+            )
             if pick is not None:
                 node_id, model = pick
                 residency.hold("step", self.task_id, "", self.settings.swap_wait_s)
