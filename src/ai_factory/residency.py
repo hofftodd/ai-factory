@@ -11,6 +11,10 @@ each other out on almost every turn: about 25 s each time on a 32 GB GPU, minute
 - work whose model would push out a model that a running ai-factory step or planner call is
   using (or one serving a request right now) waits, with one event saying why;
 - among work that can start, work whose model is already loaded goes first;
+- a role's first-choice model is loaded rather than falling back to a loaded alternative,
+  unless loading it would push out a model some project's roles are bound to (an idle
+  model nothing uses costs one load, ~10 s on the R9700, and the fallback would otherwise
+  keep the first choice unloaded for good);
 - after ``AI_FACTORY_SWAP_WAIT_S`` of waiting (default 30 min) work starts anyway, so nothing
   waits forever.
 
@@ -24,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any
@@ -263,6 +268,38 @@ def blocker(
     if not fits:
         return f"{p.machine.name} has no room for {model} until a model in use there finishes"
     return ""
+
+
+def bound_models(
+    projects: Iterable[Project], nodes: dict[int | None, Node]
+) -> set[tuple[str, str]]:
+    """(machine, model) for every model a running project's roles are bound to, fallbacks
+    included."""
+    out: set[tuple[str, str]] = set()
+    for project in projects:
+        if project.paused:
+            continue
+        for b in (project.role_bindings or {}).values():
+            for c in [b, *(b.get("also") or [])]:
+                nid = c.get("node_id")
+                p = placement(nodes.get(nid), c.get("model") or "") if nid is not None else None
+                if p is not None:
+                    out.add((p.machine.name, p.model.name))
+    return out
+
+
+def displaces(
+    node: Node | None,
+    model: str,
+    wanted: AbstractSet[tuple[str, str]],
+    planned: dict[str, set[str]] | None = None,
+) -> bool:
+    """Whether loading (node, model) would push out a model in ``wanted``."""
+    p = placement(node, model)
+    if p is None:
+        return False
+    evicted, _ = would_evict(p, (planned or {}).get(p.machine.name, set()))
+    return any((p.machine.name, x.name) in wanted for x in evicted)
 
 
 def warm(node: Node | None, model: str) -> bool:

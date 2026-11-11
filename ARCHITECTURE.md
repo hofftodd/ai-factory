@@ -415,6 +415,10 @@ models each machine has loaded (`ai-factory/residency.py`) and:
   models, least recently used first), with one event in the activity feed
   saying which model and project it is waiting for;
 - starts work whose model is already loaded first;
+- loads a step's first-choice model rather than use a loaded fallback, unless
+  loading it would push out a model some project's roles are bound to (an idle
+  model nothing uses costs one load; the fallback would keep the first choice
+  unloaded for good);
 - after `AI_FACTORY_SWAP_WAIT_S` (30 minutes) of waiting, starts anyway.
 
 A project's Settings page also warns when two of its agents' models share a

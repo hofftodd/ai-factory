@@ -337,3 +337,49 @@ def test_machines_group_nodes_by_the_computer_serving_their_model(client, origin
     assert got["box.lan"]["ai_swap"] is False and [n["name"] for n in got["box.lan"]["nodes"]] == [
         "plain"
     ]
+
+
+def _tester_first_thinkingcap(client, origin, nid: int) -> dict:
+    return make_project(
+        client,
+        origin,
+        executor_kind="opencode",
+        role_bindings={
+            "tester": {
+                "node_id": nid,
+                "model": "thinkingcap",
+                "also": [{"node_id": nid, "model": "flint"}],
+            },
+            "builder": {"node_id": nid, "model": "flint"},
+        },
+    )
+
+
+def test_a_cold_first_choice_loads_when_it_pushes_out_only_an_unused_model(client, origin):
+    """future-lab, 2026-11-10: ai-swap unloaded idle ThinkingCap for its resident
+    qwen3.8-27b, and every Tester step then went to the loaded fallback (flint), so
+    ThinkingCap never came back. Loading it only pushes out qwen3.8-27b, which no role
+    uses, so the Tester's first choice wins."""
+    nid = add_node(client)
+    cluster(
+        64,
+        qwen=("ready", 30, "1"),  # least recently used: the one ai-swap would unload
+        flint=("ready", 30, "2"),
+        thinkingcap=("stopped", 30, ""),
+    )
+    p = _tester_first_thinkingcap(client, origin, nid)
+    make_task(client, p["id"], script="")
+    assert [m for _, _, m in pick_ready()] == ["thinkingcap"]
+
+
+def test_the_loaded_fallback_wins_when_loading_would_push_out_a_bound_model(client, origin):
+    nid = add_node(client)
+    cluster(
+        64,
+        flint=("ready", 30, "1"),  # now flint is the one ai-swap would unload
+        qwen=("ready", 30, "2"),
+        thinkingcap=("stopped", 30, ""),
+    )
+    p = _tester_first_thinkingcap(client, origin, nid)
+    make_task(client, p["id"], script="")
+    assert [m for _, _, m in pick_ready()] == ["flint"]
