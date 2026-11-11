@@ -315,6 +315,20 @@ RESULTS_CONTRACT = [
     "",
 ]
 
+SERVICES_SCRIPT = "tests/services.sh"
+
+SERVICES_CONTRACT = [
+    "## Services the tests need",
+    "If the tests need a running service (a database, a message broker...), write "
+    "`tests/services.sh`: a POSIX sh script that is sourced (`. tests/services.sh`), starts "
+    "those services in the background, using only local sockets or ports and data under "
+    "`/tmp`, and exports how to reach them (e.g. `DATABASE_URL`). It must do nothing "
+    "but export when they already run, so sourcing it twice is harmless. ai-factory sources "
+    "it before every Tester and Builder step, so the services are already up when the agent "
+    "starts; `tests/run.sh` should source it too rather than start them a second way.",
+    "",
+]
+
 
 def test_note_lines(project: Project, setup: bool = False) -> list[str]:
     """The user's note on how the project's tests already run, for the Tester."""
@@ -503,7 +517,27 @@ def build_role_pack(
     lines += RESULTS_CONTRACT
     if role == "tester":
         lines += test_note_lines(project, setup=task.kind == "setup")
-    lines += ["Run the suite with `sh tests/run.sh`.", ""]
+    if (repo / SERVICES_SCRIPT).is_file():
+        lines += [
+            "## Services",
+            f"`{SERVICES_SCRIPT}` has already started the services the tests need and "
+            "exported how to reach them (e.g. `DATABASE_URL`): run tests directly against "
+            "them. Never start, stop or kill those services yourself. If one has stopped, "
+            f"run `. {SERVICES_SCRIPT}` again.",
+            "",
+        ]
+    elif role == "tester":
+        lines += SERVICES_CONTRACT
+    if role == "tester":
+        lines += ["Run the suite with `sh tests/run.sh`.", ""]
+    else:
+        lines += [
+            "Run this task's tests while you work, not the whole suite: once you finish, "
+            "ai-factory runs the whole suite (`sh tests/run.sh`) and sends any failure "
+            "back to you with its output. Run the whole suite yourself only to check a "
+            "failure it reported.",
+            "",
+        ]
     if failing_acceptance:
         lines += [
             "## Failing acceptance tests",

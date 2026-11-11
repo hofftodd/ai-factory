@@ -279,6 +279,15 @@ writes two standard files into a results folder ai-factory provides
   Cargo, Maven and most others can produce);
 - `coverage.xml` (Cobertura) or `lcov.info`: which lines the tests ran.
 
+The Builder runs only its task's tests while it works: after it finishes,
+ai-factory runs the whole suite and sends any failure back to it.
+
+When the tests need a running service, such as a database, the Tester also
+writes `tests/services.sh`. ai-factory sources it before every Tester and
+Builder step, so the services are already up and their variables (such as
+`DATABASE_URL`) set when the agent starts. The agents are told not to start
+or stop the services themselves, and `tests/run.sh` sources the same script.
+
 ai-factory reads these after every run and keeps them, so you can review test
 results:
 
@@ -327,7 +336,10 @@ calls, 400,000 new tokens, 800 changed lines, 3 identical responses in a row,
 and a time limit per task. New tokens are the prompt the model hadn't already
 seen in the attempt, plus its output: each call of an agent session resends the
 whole conversation, which the server mostly has cached, so counting every
-prompt in full would trip long, healthy sessions.
+prompt in full would trip long, healthy sessions. When a Tester or Builder
+run hits the time limit, the next run of that agent on the task gets the time
+limit once more (up to three times it), so a task that just needs longer isn't
+failed the same way on every model.
 
 **The escalation ladder.** A failed attempt doesn't just stop the project:
 

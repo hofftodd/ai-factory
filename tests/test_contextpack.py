@@ -187,3 +187,29 @@ def test_testers_see_how_the_project_runs_its_tests(tmp_path):
     plain = Project(name="p", repo_url="x")
     pack = build_role_pack(plain, setup, repo, "tester", docs={}, test_paths=["tests"])
     assert "from the user" not in pack.text
+
+
+def test_builders_leave_the_whole_suite_to_ai_factory(tmp_path):
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T1", title="Add", req_refs=[])
+    pack = build_role_pack(project, task, repo, "builder", docs={}, test_paths=["tests"])
+    assert "not the whole suite" in pack.text and "Run the suite with" not in pack.text
+    pack = build_role_pack(project, task, repo, "tester", docs={}, test_paths=["tests"])
+    assert "Run the suite with `sh tests/run.sh`" in pack.text
+
+
+def test_packs_say_the_services_already_run(tmp_path):
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T1", title="Add", req_refs=[])
+    pack = build_role_pack(project, task, repo, "tester", docs={}, test_paths=["tests"])
+    assert "## Services the tests need" in pack.text  # how to write tests/services.sh
+    pack = build_role_pack(project, task, repo, "builder", docs={}, test_paths=["tests"])
+    assert "services" not in pack.text.lower()
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "services.sh").write_text("export DATABASE_URL=x\n")
+    for role in ("tester", "builder"):
+        pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
+        assert "has already started the services" in pack.text
+        assert "## Services the tests need" not in pack.text
