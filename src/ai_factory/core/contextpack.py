@@ -541,6 +541,17 @@ def build_role_pack(
             "",
         ]
     lines += KIND_NOTES.get(role, {}).get(task.kind, [])
+    if role == "tester" and task.no_build and task.kind == "feature":
+        lines += [
+            "## This task: fix tests, not code",
+            "Some tests pin a detail the documents leave open (an element id or CSS class, a "
+            "function or module name, the exact shape of a response). The code is right: "
+            "change those tests so they check the behaviour the documents describe, through "
+            "what a person or caller actually uses (visible text, roles and labels, public "
+            "commands and API responses). No Builder runs after you: the whole suite must "
+            "pass when you finish.",
+            "",
+        ]
     if task.description:
         lines += ["## Goal", task.description.strip(), ""]
     if task.criteria:

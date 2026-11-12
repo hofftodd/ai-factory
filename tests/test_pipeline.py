@@ -743,3 +743,73 @@ def test_roles_are_listed(client):
         "Builder Agent",
         "Reviewer Agent",
     ]
+
+
+# -- tests-only tasks (the replanner fixing tests that pinned a detail) ----------------
+
+# A test that pinned a detail, already fixed by the Tester: the code is right as it is.
+FIXED_TEST = (
+    RUNNER
+    + """cat > tests/check_greet.sh <<'EOS'
+sh greet.sh bob | grep -q bob
+EOS
+"""
+)
+
+
+async def test_a_tests_only_task_runs_no_builder(client, origin):
+    p = make_project(client, origin)
+    first = add_task(client, p["id"], scripts())
+    t = add_task(
+        client,
+        p["id"],
+        scripts(tester=FIXED_TEST, builder="exit 1"),
+        no_build=True,
+        deps=[first["id"]],
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    assert task(t["id"]).state == TaskState.DONE, task(t["id"]).reason
+    assert [r.step for r in runs_of(t["id"])] == ["tester"]
+
+
+async def test_a_tests_only_task_must_leave_the_suite_green(client, origin):
+    p = make_project(client, origin)
+    broken = RUNNER + "echo false > tests/check_greet.sh\n"
+    t = add_task(client, p["id"], scripts(tester=broken), no_build=True)
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    row = task(t["id"])
+    assert row.state == TaskState.FAILED and "this task only fixes tests" in row.reason
+
+
+def test_the_replanner_adds_tests_only_tasks(client, origin):
+    from ai_factory.core.models import PlanRevision, Project
+    from ai_factory.orchestrator.replan import apply_revision, review_system_prompt
+
+    p = make_project(client, origin)
+    with session() as s:
+        rev = PlanRevision(
+            project_id=p["id"],
+            version=1,
+            trigger="acceptance failed",
+            ops=[
+                {
+                    "op": "add",
+                    "key": "T9",
+                    "task": {"title": "Test the export by its label", "tests_only": True},
+                    "reason": "the test guessed an element id",
+                },
+                {"op": "add", "key": "T10", "task": {"title": "Build it"}, "reason": "needed"},
+            ],
+        )
+        s.add(rev)
+        s.commit()
+        s.refresh(rev)
+        assert rev.id is not None
+        rev_id = rev.id
+    apply_revision(rev_id)
+    with session() as s:
+        rows = {t.key: t for t in s.exec(select(Task).where(Task.project_id == p["id"]))}
+        project = s.get(Project, p["id"])
+    assert rows["T9"].no_build is True and rows["T10"].no_build is False
+    prompt = review_system_prompt(project, {}, list(rows.values()), "acceptance failed", "")
+    assert '"tests_only": true' in prompt and "the test is wrong, not the code" in prompt

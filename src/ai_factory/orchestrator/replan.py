@@ -68,6 +68,19 @@ if TYPE_CHECKING:
 MODIFIABLE = (TaskState.QUEUED, TaskState.PROPOSED, TaskState.BLOCKED)
 EDITABLE_FIELDS = ("title", "goal", "criteria", "req_refs")
 
+# In the future-lab run two tasks existed only to make the code match test ids the
+# acceptance tests had guessed before any screen existed ("render a create button with
+# the expected test id"). A test that pins what the documents leave open is the thing
+# to fix.
+TESTS_NOT_CODE = [
+    "When something fails only because a test pins a detail the documents leave open (an "
+    "element id or CSS class, a function or module name, the exact shape of a response "
+    'or message), the test is wrong, not the code: add a task with "tests_only": true '
+    "whose goal is to make those tests check the behaviour the documents describe instead. "
+    "The Tester does it and no Builder runs. Never add a task that reshapes working code "
+    "to match a guess a test made.",
+]
+
 
 def queue_review(
     project_id: int, trigger: str, task_id: int | None = None, output: str = ""
@@ -137,13 +150,15 @@ def review_system_prompt(
             "Ops:",
             '- {"op": "add", "task": {"key": "T9", "title": "...", "goal": "...", '
             '"req_refs": [], "criteria": ["..."], "deps": ["T3"], "size": "small"}, '
-            '"reason": "..."}',
+            '"reason": "..."} (add "tests_only": true to the task for a task that only fixes '
+            "tests)",
             '- {"op": "remove", "key": "T5", "reason": "..."}',
             '- {"op": "modify", "key": "T6", "changes": {"goal": "...", "criteria": ["..."]}, '
             '"reason": "..."}',
             "Only tasks in state queued, proposed or blocked can be removed or modified, and "
             f"only their {', '.join(EDITABLE_FIELDS)}. Every op needs a reason.",
             *TASK_RULES[1:],
+            *TESTS_NOT_CODE,
             'If the planning documents themselves are wrong or incomplete, set "spec_change": '
             '{"reason": "...", "proposal": "..."} in plain language: a person decides, and the '
             "Project Planning Agent updates the documents.",
@@ -429,6 +444,8 @@ def apply_revision(revision_id: int) -> None:
                     criteria=[str(c) for c in (t.get("criteria") or [])],
                     req_refs=list(t.get("req_refs") or []),
                     deps=[d.id for k in (t.get("deps") or []) if (d := by_key.get(k)) and d.id],
+                    # Fixes tests only: the Tester changes them, no Builder runs.
+                    no_build=t.get("tests_only") is True,
                     origin="replan",
                     state=TaskState.QUEUED,
                 )
