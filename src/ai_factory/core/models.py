@@ -266,7 +266,11 @@ class TaskRun(SQLModel, table=True):
     # Normalised hash of the failure output, to detect the same failure repeating.
     error_sig: str = ""
     # config | watchdog | executor | validation | merge | internal | budget | coverage
+    # | review | app | ... (core/causes.py maps each to agent / factory / ...)
     failure_kind: str = ""
+    # The user's verdict on why it failed, overriding the kind's cause: "factory" when
+    # they marked a blocked task's failure as an ai-factory bug ("" = none).
+    cause_override: str = ""
     # Which agent this run was: tester | builder ("" = a single-step scripted task).
     step: str = ""
     diff_lines: int = 0
