@@ -224,10 +224,13 @@ Tester from its criteria.
    so the task builds on the latest code and its own merge stays clean. If
    its work conflicts with theirs, the merge is committed with the conflict
    markers in place and the Builder's briefing says to resolve them first,
-   keeping both sides' intent; the attempt fails if any markers are left. Only a
-   conflict the Builder can't take on (its tests aren't written yet, or a
-   conflicted file is a test, test configuration or `.ai-factory/` file) blocks
-   the task at once, and the inbox asks you to start it over or resolve it.
+   keeping both sides' intent; the attempt fails if any markers are left. When
+   the attempt starts with the Tester (the task was sent back for more tests,
+   say for coverage), the Tester works from the task's own state and the merge
+   comes in after it, for the Builder. Only a conflict the Builder can't take
+   on (no Builder step follows, or a conflicted file is a test, test
+   configuration or `.ai-factory/` file) blocks the task at once, and the inbox
+   asks you to start it over or resolve it.
 2. **Tester step.** The Tester gets a briefing (the task's goal and criteria,
    the requirements it covers, the relevant part of the design, an outline
    of the code, the existing tests) and writes tests for the task. ai-factory

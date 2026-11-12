@@ -340,7 +340,7 @@ async def test_parallel_tasks_that_break_each_other_are_caught_before_merging(cl
     assert (repo / "a.txt").exists() and not (repo / "b.txt").exists()
 
 
-def _same_file_tasks(client, origin, b_builder: str):
+def _same_file_tasks(client, origin, b_builder: str, b_tester: str = ""):
     p = make_project(client, origin, max_parallel_tasks=2)
     a = add_task(
         client,
@@ -351,7 +351,7 @@ def _same_file_tasks(client, origin, b_builder: str):
     b = add_task(
         client,
         p["id"],
-        scripts(tester=_check("b", "grep -q B shared.txt"), builder=b_builder),
+        scripts(tester=b_tester or _check("b", "grep -q B shared.txt"), builder=b_builder),
         title="B",
     )
     return p, a, b
@@ -371,6 +371,31 @@ async def test_parallel_tasks_editing_the_same_file_go_back_to_the_builder(clien
     texts = [e.message for e in events(b["id"], "system")]
     assert any("which the Builder resolves" in m for m in texts)
     assert any("the Builder resolved the merge conflicts" in m for m in texts)
+    assert (gitops.repo_dir(p["id"]) / "shared.txt").read_text() == "A\nB\n"
+
+
+async def test_a_conflict_found_before_the_tester_goes_to_the_builder_after_it(client, origin):
+    """B's Builder sends it back to the Tester (as a coverage round does), and A merges a
+    conflicting change meanwhile. B's next attempt starts with the Tester, which may not
+    edit code: the merge waits until after the Tester, and the Builder resolves it."""
+    builder = (
+        "sleep 3\n"
+        "if grep -q '^<<<<<<<' shared.txt 2>/dev/null; then printf 'A\\nB\\n' > shared.txt\n"
+        "else echo X > shared.txt; echo 'check_b contradicts' > "
+        '"$AI_FACTORY_RESULTS/tests-conflict.md"; fi'
+    )
+    # Each Tester run adds a new check, as a Tester sent back for more tests does.
+    tester = _check("b_$$", "grep -q B shared.txt")
+    p, a, b = _same_file_tasks(client, origin, builder, tester)
+    orch = Orchestrator()
+    await drive(orch, lambda: {task(a["id"]).state, task(b["id"]).state} <= TERMINAL, timeout=120)
+    assert task(a["id"]).state == TaskState.DONE
+    assert task(b["id"]).state == TaskState.DONE, task(b["id"]).reason
+    texts = [e.message for e in events(b["id"], "system")]
+    assert any("it comes in after the Tester, for the Builder to resolve" in m for m in texts)
+    assert any("which the Builder resolves" in m for m in texts)
+    assert any("the Builder resolved the merge conflicts" in m for m in texts)
+    assert [r.step for r in runs_of(b["id"])][-2:] == ["tester", "builder"]
     assert (gitops.repo_dir(p["id"]) / "shared.txt").read_text() == "A\nB\n"
 
 
