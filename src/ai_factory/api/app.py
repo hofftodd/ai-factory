@@ -21,7 +21,7 @@ from sqlalchemy import delete
 from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
-from ai_factory import github, gitops, residency
+from ai_factory import github, gitops, residency, testresults
 from ai_factory.api.inbox import router as inbox_router
 from ai_factory.api.schemas import (
     ControlRequest,
@@ -575,6 +575,8 @@ def discard_task(task_id: int) -> Task:
 
 def _run_out(run: TestRun, cases: list[TestCase] | None = None) -> dict[str, Any]:
     out = run.model_dump()
+    # The entry pages of the runner's HTML report, served by test_report().
+    out["report"] = testresults.report_pages(get_settings().reports_dir / str(run.id))
     if cases is not None:
         out["cases"] = [c.model_dump() for c in cases]
     return out
@@ -598,6 +600,26 @@ def task_tests(task_id: int) -> dict[str, Any]:
     return {
         "runs": [_run_out(r, _cases(r.id) if i == 0 else None) for i, r in enumerate(runs)],
     }
+
+
+# Reports are written by project code, so they are served as a sandboxed document: their
+# scripts run in an opaque origin and cannot reach the dashboard's API. Their own files
+# (scripts, styles, data) are readable cross-origin so the report still renders.
+REPORT_HEADERS = {
+    "Content-Security-Policy": "sandbox allow-scripts allow-popups allow-downloads",
+    "X-Content-Type-Options": "nosniff",
+    "Access-Control-Allow-Origin": "*",
+}
+
+
+@router.get("/api/test-runs/{run_id}/report/{path:path}")
+def test_report(run_id: int, path: str) -> FileResponse:
+    """A file of a test run's saved HTML report."""
+    root = (get_settings().reports_dir / str(run_id)).resolve()
+    f = (root / path).resolve()
+    if not f.is_relative_to(root) or not f.is_file():
+        raise HTTPException(404, "no such report file")
+    return FileResponse(f, headers=REPORT_HEADERS)
 
 
 @router.get("/api/projects/{project_id}/tests")

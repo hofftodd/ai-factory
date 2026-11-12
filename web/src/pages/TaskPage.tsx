@@ -43,6 +43,26 @@ export function CaseList({ cases, onlyTask = false }: { cases: TestCase[]; onlyT
   );
 }
 
+/** Links to the test runner's HTML report for a run, if it wrote one. */
+export function ReportLinks({ run, label = "HTML report" }: { run: TestRun; label?: string }) {
+  const pages = run.report ?? [];
+  if (!pages.length) return null;
+  const failing = run.failed + run.errors > 0;
+  return (
+    <span className={`report-links small ${failing ? "failing" : ""}`}>
+      {label && `${label}: `}
+      {pages.map((p, i) => (
+        <span key={p}>
+          {i > 0 && ", "}
+          <a href={`/api/test-runs/${run.id}/report/${p}`} target="_blank" rel="noreferrer">
+            {pages.length === 1 ? "open" : p.replace(/\/index\.html$/, "").replace(/\.html$/, "")}
+          </a>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function RunSummary({ run }: { run: TestRun }) {
   const failing = run.failed + run.errors;
   return (
@@ -79,6 +99,7 @@ function TestsView({ taskId, live }: { taskId: number; live: boolean }) {
       </h3>
       {latest.problem && <div className="error-note">{latest.problem}</div>}
       <RunSummary run={latest} />
+      <ReportLinks run={latest} label={latest.failed + latest.errors ? "Failures in the HTML report" : "HTML report"} />
       <h3>This task's tests</h3>
       <CaseList cases={latest.cases ?? []} onlyTask />
       <details>
@@ -105,7 +126,7 @@ function TestsView({ taskId, live }: { taskId: number; live: boolean }) {
       )}
       <h3>History</h3>
       <table className="cases small">
-        <thead><tr><th>When</th><th>Step</th><th>Passed</th><th>Failed</th><th>Coverage</th><th>Changed lines</th></tr></thead>
+        <thead><tr><th>When</th><th>Step</th><th>Passed</th><th>Failed</th><th>Coverage</th><th>Changed lines</th><th>Report</th></tr></thead>
         <tbody>
           {data.runs.map((r) => (
             <tr key={r.id}>
@@ -115,6 +136,7 @@ function TestsView({ taskId, live }: { taskId: number; live: boolean }) {
               <td className={r.failed + r.errors ? "warn" : ""}>{r.failed + r.errors}</td>
               <td>{pct(r.coverage)}</td>
               <td>{r.step === "builder" ? pct(r.changed_coverage) : ""}</td>
+              <td><ReportLinks run={r} label="" /></td>
             </tr>
           ))}
         </tbody>

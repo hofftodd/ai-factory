@@ -85,6 +85,11 @@ class Settings:
     def runs_dir(self) -> Path:
         return self.data_dir / "runs"
 
+    @property
+    def reports_dir(self) -> Path:
+        """Saved HTML test reports, one folder per TestRun id."""
+        return self.data_dir / "reports"
+
 
 def get_settings() -> Settings:
     return Settings()

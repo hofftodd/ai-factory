@@ -95,6 +95,12 @@ def system_prompt(
         f"Only files under `{roles.ENV_DIR}/` are accepted. After the blocks, list in one "
         "or two sentences what the image provides.",
     ]
+    parts += [
+        "",
+        "Install an HTML reporter for each test framework too (e.g. pytest-html, "
+        "@vitest/ui, jest-html-reporters), so the test runner can write an HTML report "
+        "of the results.",
+    ]
     if project.test_note.strip():
         parts += [
             "",

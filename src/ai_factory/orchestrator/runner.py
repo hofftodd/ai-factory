@@ -12,6 +12,7 @@ mid-step always wins.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import time
 from collections.abc import Callable
@@ -135,8 +136,10 @@ def store_results(
     task_tests: list[str] | None = None,
     changed_cov: float | None = None,
     changed_lines: int = 0,
+    results_dir: Path | None = None,
 ) -> TestRun:
-    """Save one suite run's results and coverage."""
+    """Save one suite run's results and coverage, and the runner's HTML report when
+    `results_dir` has one."""
     run = TestRun(
         project_id=project_id,
         task_id=task_id,
@@ -174,6 +177,10 @@ def store_results(
             )
         s.commit()
         s.refresh(run)
+    if results_dir is not None:
+        # The results are stored either way; only the HTML report would be missing.
+        with contextlib.suppress(OSError):
+            testresults.save_report(results_dir, get_settings().reports_dir / str(run.id))
     return run
 
 
@@ -1144,6 +1151,7 @@ class TaskRunner:
             task_tests,
             changed_cov,
             changed_lines,
+            results_dir,
         )
         summary = f"{run.passed} passed, {run.failed + run.errors} failed"
         if run.coverage is not None:
