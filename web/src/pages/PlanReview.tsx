@@ -11,6 +11,7 @@ const KIND_LABEL: Record<Task["kind"], string> = {
   setup: "standard task: setup",
   acceptance: "standard task: acceptance tests",
   feature: "",
+  seed: "standard task: demo data",
   docs: "standard task: documentation",
 };
 

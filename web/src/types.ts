@@ -91,7 +91,7 @@ export interface Task {
   validation_cmd: string;
   deps: number[];
   key: string;
-  kind: "setup" | "acceptance" | "feature" | "docs";
+  kind: "setup" | "acceptance" | "feature" | "seed" | "docs";
   criteria: string[];
   tests_ready: boolean;
   coverage_rounds: number;

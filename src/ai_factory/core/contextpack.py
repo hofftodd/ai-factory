@@ -425,6 +425,16 @@ KIND_NOTES = {
             "this.",
             "",
         ],
+        "seed": [
+            "## This task: demo data",
+            "Write tests that run `scripts/seed.sh` against an empty store (the services "
+            "the tests use) and check, through the app's own interface (its API or "
+            "commands), that the demo data the requirements describe is there, that every "
+            "main workflow has data to work with, and that running it again doesn't "
+            "duplicate anything. List in `tests/app-pages.txt` the pages that show the data, "
+            "so the app check looks at them filled in.",
+            "",
+        ],
         "docs": [
             "## This task: documentation",
             "Write tests that check README.md says what the project is, how to run it and "
@@ -443,6 +453,16 @@ KIND_NOTES = {
             "If the project has a server or a user interface, write `scripts/start.sh` "
             '(see "The running app" below) so the skeleton already starts and shows a page, '
             "and have README.md's run instructions use it.",
+            "",
+        ],
+        "seed": [
+            "## This task: demo data",
+            "Write `scripts/seed.sh`: it loads realistic demo data (believable names, "
+            "values and relationships, not 'test1', 'foo'), enough to try every main "
+            "workflow and at the volume the requirements name. Load it through the app's own "
+            "code or API so it is valid, and make running it twice harmless. Have "
+            "`scripts/start.sh` run it when the store is empty, so the app always starts "
+            "with something to see.",
             "",
         ],
         "docs": [

@@ -53,15 +53,22 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
    add) and searches the web when it needs to. You can edit any document
    directly, and anything you push to the repository's default branch is
    merged into the milestone branch before the planner's next turn.
+   Before writing, it settles who uses the software and their main
+   workflows, how people find their way and how it should look (for a
+   UI), and the demo data it starts with (when it keeps data); these get
+   sections of their own in the requirements.
 2. **Approve the documents.** This checkpoint is always on.
 3. **Breakdown.** The Task Planning Agent splits the work into
    plain-language tasks: a goal, the requirements covered, up to six "done
-   when" criteria, dependencies and a size. Every plan also gets three
+   when" criteria, dependencies and a size. Every plan also gets the
    standard tasks: **project setup** (skeleton, test runner,
-   first `README.md` and `ARCHITECTURE.md`), **acceptance tests** (the
-   definition of done, kept out of the suite each task must pass) and **documentation** (last: `README.md` explains the
-   project, how to run it and how to test it; `ARCHITECTURE.md` how it's
-   built).
+   `scripts/start.sh` for an app, first `README.md` and `ARCHITECTURE.md`),
+   **acceptance tests** (the definition of done, kept out of the suite each
+   task must pass), **demo data** when the requirements have a "Demo data"
+   section (`scripts/seed.sh`, loaded by `scripts/start.sh` into an empty
+   store, so the app starts with something to try) and **documentation**
+   (last: `README.md` explains the project, how to run it and how to test
+   it; `ARCHITECTURE.md` how it's built).
 4. **Review the plan** (optional checkpoint, on by default). Edit, drop or
    re-run tasks. `tasks.md` is committed alongside the documents.
 5. **Prepare the environment.** The Environment Agent reads the documents

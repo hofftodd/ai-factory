@@ -145,7 +145,9 @@ async def test_chat_writes_and_commits_documents(client, origin, llm):
 
     repo = gitops.repo_dir(p["id"])
     log = git("log", "--format=%s", cwd=repo)
-    assert "spec: I drafted everything." in log
+    # The commit says which documents changed, not the first line of the chat reply.
+    assert "spec: update acceptance-criteria.md, design.md, requirements.md" in log
+    assert "I drafted everything" not in log
     # The planner saw the user's message.
     assert last_user_text(llm.requests[-1]) == "Build a greeter."
 

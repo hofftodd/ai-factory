@@ -56,6 +56,7 @@ from ai_factory.planner import (
     topo_order,
     unsaved_retry,
     unsaved_writes,
+    wants_demo_data,
 )
 
 log = logging.getLogger("ai-factory.jobs")
@@ -95,6 +96,13 @@ def planner_note(project_id: int, text: str, job_id: int | None = None) -> None:
     with session() as s:
         s.add(SpecMessage(project_id=project_id, role="assistant", content=text, job_id=job_id))
         s.commit()
+
+
+def spec_commit_message(files: dict[str, str]) -> str:
+    """What a Project Planner commit changed, e.g. "spec: update requirements.md, design.md"
+    (not the first line of its chat reply, which reads like "You're right, my apologies")."""
+    names = sorted({path.rsplit("/", 1)[-1] for path in files})
+    return f"spec: update {', '.join(names)}" if names else "spec: update"
 
 
 def read_docs(project: Project) -> dict[str, str]:
@@ -386,9 +394,8 @@ class JobRunner:
         if not finish_job(self.job_id, (JobState.RUNNING,), JobState.DONE):
             return  # stopped while we were finishing: apply nothing
         if out.files:
-            first = out.message.splitlines()[0][:60] if out.message else "update"
             await asyncio.to_thread(
-                gitops.write_and_commit, self.project_id, out.files, f"spec: {first}"
+                gitops.write_and_commit, self.project_id, out.files, spec_commit_message(out.files)
             )
         for what in out.rejected:
             roles.denied(self.project_id, None, roles.PROJECT_PLANNER, f"write {what}")
@@ -478,7 +485,8 @@ class JobRunner:
         changed = not accepted or gitops.file_changed_since(
             self.project_id, doc_path(project, "acceptance"), accepted[-1].tests_commit
         )
-        self._create_tasks(project, standard_tasks(specs, kinds, changed), done)
+        demo = wants_demo_data(read_docs(project).get("requirements", ""))
+        self._create_tasks(project, standard_tasks(specs, kinds, changed, demo), done)
 
     def _create_tasks(
         self, project: Project, specs: list[TaskSpec], done: list[Task] | None = None

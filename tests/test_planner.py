@@ -6,6 +6,7 @@ from ai_factory.core.models import Project
 from ai_factory.planner import (
     ACCEPTANCE,
     DOCS,
+    SEED,
     SETUP,
     PlanError,
     chat_stage,
@@ -17,6 +18,7 @@ from ai_factory.planner import (
     render_tasks_md,
     standard_tasks,
     topo_order,
+    wants_demo_data,
     writable,
 )
 
@@ -144,6 +146,47 @@ def test_replan_keeps_finished_standard_tasks():
     assert changed[0].title == "Update the acceptance tests"
 
 
+def test_demo_data_comes_after_the_features_and_before_the_docs():
+    planned = standard_tasks(parse_tasks(TASKS), demo_data=True)
+    assert [t.key for t in planned][-2:] == [SEED, DOCS]
+    by_key = {t.key: t for t in planned}
+    assert set(by_key[SEED].deps) == {"T1", "T2"}
+    assert SEED in by_key[DOCS].deps
+    assert by_key[SEED].kind == "seed" and by_key[SEED].title == "Demo data"
+    assert any("scripts/seed.sh" in c for c in by_key[SEED].criteria)
+
+
+def test_no_demo_data_task_unless_the_requirements_ask_for_it():
+    assert SEED not in [t.key for t in standard_tasks(parse_tasks(TASKS))]
+
+
+def test_replan_updates_the_demo_data():
+    done = {SETUP: "setup", ACCEPTANCE: "acceptance", SEED: "seed", DOCS: "docs"}
+    planned = standard_tasks(parse_tasks(TASKS), done, False, demo_data=True)
+    assert [t.key for t in planned][-2:] == ["SEED-2", "DOCS-2"]
+    assert planned[-2].title == "Update the demo data"
+
+
+@pytest.mark.parametrize(
+    ("requirements", "wanted"),
+    [
+        ("# R\n\n## Demo data\n- 20 recipes", True),
+        ("# R\n\n### demo data\n", True),
+        ("# R\n\n## Users and workflows\n- lab techs", False),
+        ("We have no demo data heading here.", False),
+    ],
+)
+def test_the_demo_data_section_asks_for_a_seed_task(requirements, wanted):
+    assert wants_demo_data(requirements) is wanted
+
+
+def test_the_project_planner_asks_about_users_workflows_and_demo_data():
+    design = chat_system_prompt(P, {}, [])
+    assert "## Users and workflows" in design and "## Demo data" in design
+    assert "design system" in design
+    assert "A generated screen per data type is not a user interface" in design
+
+
 def test_replan_reserves_finished_keys_and_drops_deps_on_them():
     items = [{"key": "T5", "title": "x", "criteria": ["c"], "deps": ["T1"]}]
     (t,) = parse_tasks(json.dumps(items), done=("T1",))
@@ -202,7 +245,7 @@ def test_planner_prompts_think_in_plain_language():
     for prompt in (design, review, breakdown):
         assert "Never write code, tests, file names or paths, shell commands" in prompt
     assert f"{D}/acceptance-criteria.md" in design
-    assert "ai-factory adds three standard tasks" in breakdown
+    assert "ai-factory adds the standard tasks itself" in breakdown
 
 
 def test_parse_chat_accepts_separator_style_blocks():

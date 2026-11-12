@@ -242,6 +242,21 @@ _STAGE_GUIDANCE = {
     "design": [
         "Current step: DESIGN. Ask clarifying questions until the request is clear, then "
         "write all three documents. End by asking the user to review them.",
+        "Software is built for people: settle these with the user before writing, and "
+        "record the answers in the requirements, unless the user has already said:",
+        "- Who uses it, and the three or so main things they do with it (their workflows), "
+        "step by step.",
+        "- If it has a user interface: how people find their way (what they see first, how "
+        "they get to each thing), and how it should look (a component library or design "
+        "system to use, or one you propose). A generated screen per data type is not a "
+        "user interface: design the screens around the workflows.",
+        "- If it keeps data: the demo data it starts with, so someone can try every "
+        "workflow straight away (what kinds of records, how many, how realistic).",
+        "In the requirements, give these sections of their own: `## Users and workflows`, "
+        "and `## Demo data` when the software keeps data (leave that section out "
+        "otherwise). Phrase acceptance criteria for a user interface as what a person does "
+        "and sees, e.g. `- AC-4 (FR-2.1) From the home page, a user finds recipe R-1 and "
+        "opens its graph in three clicks or fewer.`",
     ],
     "review": [
         "Current step: REVIEW. The documents exist. Revise them as the user asks, keeping "
@@ -317,11 +332,12 @@ SIZES = ("small", "medium")
 CODE_FIELDS = ("allowed_files", "files", "context_files", "validation_cmd", "command", "todos")
 
 STANDARD_TASKS_NOTE = (
-    "ai-factory adds three standard tasks itself; do not include them: project setup "
-    "(skeleton, test runner, first README and ARCHITECTURE), the acceptance tests "
-    "(kept apart from the test suite every task must pass), "
-    "and bringing the documentation up to date at the end. The toolchain (language, "
-    "test and build tools) is prepared separately, before any task runs."
+    "ai-factory adds the standard tasks itself; do not include them: project setup "
+    "(skeleton, test runner, the script that starts the app, first README and "
+    "ARCHITECTURE), the acceptance tests (kept apart from the test suite every task must "
+    "pass), loading the demo data (when the requirements describe some), and bringing "
+    "the documentation up to date at the end. The toolchain (language, test and build "
+    "tools) is prepared separately, before any task runs."
 )
 
 TASK_RULES = [
@@ -462,7 +478,7 @@ class TaskSpec:
     criteria: list[str]
     deps: list[str]
     size: str = "small"
-    kind: str = "feature"  # setup | acceptance | feature | docs
+    kind: str = "feature"  # setup | acceptance | feature | seed | docs
 
 
 def parse_tasks(text: str, done: tuple[str, ...] = ()) -> list[TaskSpec]:
@@ -536,23 +552,43 @@ def parse_task_items(items: list[Any], known: tuple[str, ...] = ()) -> list[Task
 
 # -- standard tasks -------------------------------------------------------------
 
-SETUP, ACCEPTANCE, DOCS = "SETUP", "ACCEPT", "DOCS"
+SETUP, ACCEPTANCE, SEED, DOCS = "SETUP", "ACCEPT", "SEED", "DOCS"
 ACCEPTANCE_CRITERIA = [
     "Every acceptance criterion is checked by at least one acceptance test",
     "tests/acceptance/run.sh runs the acceptance tests, and tests/run.sh leaves them out",
 ]
-STANDARD_KEYS = (SETUP, ACCEPTANCE, DOCS)
+STANDARD_KEYS = (SETUP, ACCEPTANCE, SEED, DOCS)
+SEED_CRITERIA = [
+    "scripts/seed.sh loads the demo data the requirements describe, covering every main "
+    "workflow, at the volume the performance requirements name",
+    "Running scripts/seed.sh twice leaves the same data, not twice as much",
+    "When the app starts with an empty store, scripts/start.sh loads the demo data first",
+    "tests/app-pages.txt lists pages that show the demo data",
+]
+
+
+_DEMO_DATA = re.compile(r"^#{1,6}\s*demo data\b", re.I | re.M)
+
+
+def wants_demo_data(requirements: str) -> bool:
+    """Whether the requirements ask for demo data (a "Demo data" section, which the
+    Project Planner writes when the software keeps data)."""
+    return bool(_DEMO_DATA.search(requirements or ""))
 
 
 def standard_tasks(
-    features: list[TaskSpec], done: dict[str, str] | None = None, acceptance_changed: bool = True
+    features: list[TaskSpec],
+    done: dict[str, str] | None = None,
+    acceptance_changed: bool = True,
+    demo_data: bool = False,
 ) -> list[TaskSpec]:
     """The plan as it runs: setup first, the acceptance tests, the Task Planner's tasks,
-    and the documentation last.
+    the demo data (when the requirements ask for it) and the documentation last.
 
     On a re-plan, `done` maps the finished tasks' keys to their kinds: a finished setup is
-    not repeated, and finished acceptance tests only when the criteria changed. Standard
-    keys a finished task already has get a suffix (ACCEPT-2)."""
+    not repeated, and finished acceptance tests only when the criteria changed. The demo
+    data and the documentation are brought up to date every time. Standard keys a
+    finished task already has get a suffix (ACCEPT-2)."""
     done = done or {}
     kinds = set(done.values())
 
@@ -616,6 +652,22 @@ def standard_tasks(
         TaskSpec(**{**t.__dict__, "deps": t.deps or after_setup})  # everything after setup
         for t in features
     ]
+    seed: list[TaskSpec] = []
+    if demo_data:
+        again = "seed" in kinds
+        seed = [
+            TaskSpec(
+                key=key(SEED),
+                title="Update the demo data" if again else "Demo data",
+                goal="Give the app the demo data the requirements describe, so a person who "
+                "starts it can try every main workflow straight away instead of entering "
+                "the data first.",
+                req_refs=[],
+                criteria=list(SEED_CRITERIA),
+                deps=[t.key for t in planned] or after_setup,
+                kind="seed",
+            )
+        ]
     docs = TaskSpec(
         key=key(DOCS),
         title="Documentation",
@@ -627,10 +679,14 @@ def standard_tasks(
             "project has one)",
             "ARCHITECTURE.md describes how the finished project is organised",
         ],
-        deps=[*[t.key for t in out if t.kind == "acceptance"], *[t.key for t in planned]],
+        deps=[
+            *[t.key for t in out if t.kind == "acceptance"],
+            *[t.key for t in planned],
+            *[t.key for t in seed],
+        ],
         kind="docs",
     )
-    return [*out, *planned, docs]
+    return [*out, *planned, *seed, docs]
 
 
 def find_cycle(graph: dict[str, list[str]]) -> list[str]:
