@@ -181,6 +181,16 @@ milestone, a reached spend cap) collects in one inbox, with optional push notifi
 with only the always-on ones, a project runs from approved documents to pull
 request by itself.
 
+**Before a large run, rehearse.** `uv run python scripts/rehearsal.py --like
+PROJECT_ID` pushes [examples/rehearsal](examples/rehearsal) (sample-desk, a
+small full-stack lab app with approved documents) into a fresh repository,
+creates a project on your running ai-factory with the agents' models copied
+from project `PROJECT_ID`, approves the documents and the plan, follows it to
+the milestone and prints the run report. It passes when the milestone is
+reached, the app check passes and nothing failed because of ai-factory
+itself. Use `--url` for an ai-factory on another host, with `--origin` an
+empty repository that host can clone.
+
 **Run report.** `ai-factory report PROJECT_ID` (or *Run report* on the
 project page) shows where a run's time went and why attempts failed: tasks,
 splits and replanned additions, runs per agent, tokens and spend, failed

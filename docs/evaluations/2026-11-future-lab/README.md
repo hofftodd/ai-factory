@@ -72,9 +72,10 @@ What this means:
   Output parsing, budgets, file classification and conflict ownership only
   showed up under a real, large project. The factory's own tests, which run on
   `fakellm`, didn't catch them.
-- **Each fix should leave a regression test built from what the run actually
-  did** (the agent output, the change list, the conflict). Without them the
-  next large run is the test suite.
+- **The fixes already have regression tests.** 16 of the 17 PRs added or
+  changed tests (correction: an earlier version of this evaluation asked for
+  them). What was missing is an end-to-end run on real models short of a
+  large project.
 - **A mid-sized rehearsal project** (a few hours, front end and back end, a
   database) run end to end before each large run would find this class of bug
   cheaply.
@@ -215,9 +216,22 @@ structure of the code as a whole, and there's no refactoring step.
 6. **Write acceptance tests about behaviour, not DOM IDs.** When an acceptance
    test pins an implementation detail, the replanner should send the test back
    to the Tester rather than add a task that changes the app to match it.
-7. **Make the factory hold up on its own.** Add a regression test for each of
-   the 17 fixes, built from what the run actually did. Record why each step
-   was blocked or retried (agent or factory). Run a mid-sized rehearsal project
-   before the next large run.
+7. **Make the factory hold up on its own.** Record why each step was blocked
+   or retried (agent or factory), and run a mid-sized rehearsal project before
+   the next large run. (The 17 fixes already came with unit tests.)
 8. **Keep the planner's chat text out of commit messages.** Spec commits should
    say what changed in the documents.
+
+## Follow-up
+
+The recommendations are taken up in six stacked PRs (each builds on the one before):
+
+| PR | Recommendation |
+|---|---|
+| #30 App check: start the app and look at it in a browser | 1, and part of 6 |
+| #31 Users, workflows and demo data in the plan; a demo-data task | 2, 3, 8 |
+| #32 Reviewer Agent after each task | 4; screenshots for you (5) come from #30 |
+| #33 Replanner fixes tests that pin details, not the code | 6 |
+| #34 Run report: where the time went, agent vs factory failures | 7 (causes) |
+| #35 Rehearsal project (`scripts/rehearsal.py`) | 7 (rehearsal) |
+
