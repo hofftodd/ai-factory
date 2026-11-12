@@ -312,10 +312,14 @@ RESULTS_CONTRACT = [
     "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, gotestsum);",
     "- `coverage.xml` (Cobertura) or `lcov.info`: line coverage of the project's code;",
     "- an HTML report of the results under `report/`, when the toolchain image has an "
-    "HTML reporter: one page or folder per suite (e.g. pytest-html `--html="
-    "$AI_FACTORY_RESULTS/report/backend.html --self-contained-html`, vitest `--reporter=html "
-    "--outputFile.html=$AI_FACTORY_RESULTS/report/frontend/index.html`). The user opens it "
-    "from the task when tests fail. Never let a missing reporter fail the run.",
+    "HTML reporter: one page or folder per suite, self-contained where the reporter can "
+    "be. For example pytest-html: `--html=$AI_FACTORY_RESULTS/report/backend.html "
+    "--self-contained-html`; vitest: in the config's `reporters`, add `['html', { outputDir: "
+    "'<results>/report/frontend', singleFile: true }]` (recent vitest ignores `outputFile` here "
+    "and writes into `.vitest/` in the workspace), and when vitest is installed globally "
+    "name the reporter by its file, `<npm root -g>/@vitest/ui/dist/reporter.js`, since "
+    "`html` won't resolve. The user opens the report from the task when tests fail. Check "
+    "the reporter is installed first, so a missing one never fails the run.",
     "There is no internet access: use only what the toolchain image provides.",
     "",
 ]
