@@ -6,7 +6,9 @@ management application with a FastAPI + PostgreSQL back end, a React front end
 and a recipe graph editor.
 
 - **Run:** 2026-11-09 08:42 to 2026-11-12 06:25 (about 45 hours from approved
-  plan to PR, mostly unattended).
+  plan to PR). It was kept going by hand: 17 ai-factory PRs were merged during
+  the run, and 8 more in the hours before it, to fix the factory (see
+  [The factory needed 25 PRs to finish the run](#the-factory-needed-25-prs-to-finish-the-run)).
 - **Plan:** 29 tasks at approval, about 50 by the end after splits and
   replanning.
 - **Output:** about 6.6k lines of application code, about 37k lines of tests
@@ -27,6 +29,9 @@ mocked `fetch`. The run finished with the acceptance tests passing and opened a
 PR for a front end that served a blank page in a real browser. It was fixed by
 hand afterwards (future-lab `8a71e64`, "Make the front end run in a browser").
 
+The factory itself also wasn't ready: getting through the run took 25 PRs to
+ai-factory, 17 of them merged while the run was in progress.
+
 ## What worked
 
 - **The back end holds up.** All 146 tables are generated from the schema.
@@ -34,13 +39,47 @@ hand afterwards (future-lab `8a71e64`, "Make the front end run in a browser").
   correctly. Validation, cascading deletes and pagination work.
 - **The role separation held.** Every task went Tester first, then Builder.
   No tests were deleted or weakened to make code pass.
-- **Long unattended runs work.** About 45 hours and about 50 tasks, with
-  splitting, replanning and escalation keeping it moving. It ended with the
-  acceptance tests passing and a PR open.
+- **Splitting, replanning and escalation work.** Over about 45 hours and about
+  50 tasks they recovered stuck tasks without a person rewriting them, and the
+  run ended with the acceptance tests passing and a PR open. The run was not
+  unattended, though: see the next section.
 - **The setup was solid.** The Environment Agent's toolchain image built and
   worked, the tests ran in containers, and the README is mostly accurate.
 
-## What went wrong, and the factory cause behind each
+## The factory needed 25 PRs to finish the run
+
+Eight PRs (#5–#12) were merged on 2026-11-08 and the morning of 2026-11-09 to
+get the run started. Seventeen more (#13–#29, about 2.8k lines added, 1.4k of
+them in `src/`) were merged while it ran, each to get past something that had
+stopped or misled it:
+
+| What broke | PRs |
+|---|---|
+| **Planners:** couldn't read the repository or see files pushed to GitHub; replies claimed to save documents but didn't | #13, #14 |
+| **Agent runtime:** long output lines broke reading; agents on large windows ran out of room to answer; the token budget counted every resent prompt; no search tools; no database for test runs; too little time after a timeout | #15, #16, #18, #20, #26 |
+| **Role checks, false positives:** test-conflict reports accepted while tests passed; Vitest tests and generated files counted against the wrong role | #17, #21, #22 |
+| **Task flow, dead ends:** acceptance-only tasks needed a Builder; merge conflicts had no owner (twice) | #23, #24, #29 |
+| **Scheduling and models:** tasks ran strictly one at a time; roles stayed on a fallback model | #19, #25 |
+| **Test reports:** HTML reports lost; broken Vitest example in the Tester brief; wrong acceptance-gate text | #27, #28 |
+
+What this means:
+
+- **The run measured the factory as much as the agents.** Many of the stalls
+  in the timeline (T31's 16 hours, T34's 5.5) overlap fixes to the factory, so
+  the git history can't tell agent failures from factory bugs. The run
+  database should record which, for each blocked or retried step.
+- **Most of these bugs were in the plumbing around agents, not their roles.**
+  Output parsing, budgets, file classification and conflict ownership only
+  showed up under a real, large project. The factory's own tests, which run on
+  `fakellm`, didn't catch them.
+- **Each fix should leave a regression test built from what the run actually
+  did** (the agent output, the change list, the conflict). Without them the
+  next large run is the test suite.
+- **A mid-sized rehearsal project** (a few hours, front end and back end, a
+  database) run end to end before each large run would find this class of bug
+  cheaply.
+
+## What went wrong in future-lab, and the factory cause behind each
 
 ### 1. No step ever ran the real app
 
@@ -176,5 +215,9 @@ structure of the code as a whole, and there's no refactoring step.
 6. **Write acceptance tests about behaviour, not DOM IDs.** When an acceptance
    test pins an implementation detail, the replanner should send the test back
    to the Tester rather than add a task that changes the app to match it.
-7. **Keep the planner's chat text out of commit messages.** Spec commits should
+7. **Make the factory hold up on its own.** Add a regression test for each of
+   the 17 fixes, built from what the run actually did. Record why each step
+   was blocked or retried (agent or factory). Run a mid-sized rehearsal project
+   before the next large run.
+8. **Keep the planner's chat text out of commit messages.** Spec commits should
    say what changed in the documents.
