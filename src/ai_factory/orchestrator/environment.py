@@ -100,6 +100,14 @@ def system_prompt(
         "Install an HTML reporter for each test framework too (e.g. pytest-html, "
         "@vitest/ui, jest-html-reporters), so the test runner can write an HTML report "
         "of the results.",
+        "",
+        "If the documents describe a web user interface, also install Playwright with its "
+        "Chromium and Chromium's system libraries (e.g. `npm install -g playwright` then "
+        "`npx playwright install --with-deps chromium`, as root, with PLAYWRIGHT_BROWSERS_PATH "
+        "set to a directory the `agent` user can read). ai-factory opens the running app's "
+        "pages in it after every task, and the acceptance tests drive the interface with "
+        "it. Have the check script prove Chromium launches (e.g. `node -e` with "
+        "`require('playwright').chromium.launch()`, with NODE_PATH set to `npm root -g`).",
     ]
     if project.test_note.strip():
         parts += [

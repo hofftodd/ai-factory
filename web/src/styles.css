@@ -494,6 +494,7 @@ a.stat:hover { border-color: var(--accent); }
 .badge.test-skipped { background: var(--surface-2); color: var(--muted); }
 .stat-value.bad { color: var(--bad); }
 .ok-text { color: var(--ok); }
+.bad-text { color: var(--bad); }
 .test-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
 .tests-view h3 { margin-top: 16px; }
 .cases { width: 100%; border-collapse: collapse; }

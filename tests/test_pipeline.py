@@ -8,7 +8,9 @@ real runner would) and a test; the Builder's script writes the code.
 from __future__ import annotations
 
 import json
+import shutil
 
+import pytest
 from sqlmodel import col, select
 
 from ai_factory import gitops
@@ -188,6 +190,52 @@ async def test_every_task_needs_tests(client, origin):
     t = add_task(client, p["id"], scripts(tester="true"))
     await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
     assert "the Tester added no tests" in task(t["id"]).reason
+
+
+APP_TIMEOUT = 180
+# A Builder that also writes scripts/start.sh: a page served on $APP_PORT.
+APP = """mkdir -p scripts www
+printf '#!/bin/sh\\nexec python3 -m http.server "$APP_PORT" --bind 127.0.0.1 --directory www\\n' \\
+  > scripts/start.sh
+echo '<!doctype html><html><body><h1>Greetings</h1></body></html>' > www/index.html
+"""
+# Its start script fails straight away.
+BROKEN_APP = """mkdir -p scripts
+printf '#!/bin/sh\\necho "cannot find module server"\\nexit 1\\n' > scripts/start.sh
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the app check needs node")
+async def test_a_working_app_passes_the_app_check(client, origin):
+    p = make_project(client, origin)
+    t = add_task(client, p["id"], scripts(builder=BUILDER + APP))
+    # Starting the app and a browser (or node) is slow on hosted CI runners.
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=APP_TIMEOUT)
+    assert task(t["id"]).state == TaskState.DONE, task(t["id"]).reason
+    app_runs = [r for r in test_runs_of(t["id"]) if r.step == "app"]
+    assert len(app_runs) == 1 and app_runs[0].passed >= 1 and app_runs[0].failed == 0
+    assert any("app check: the app started" in e.message for e in events(t["id"], "test"))
+
+
+async def test_an_app_that_wont_start_goes_back_to_the_builder(client, origin):
+    p = make_project(client, origin)
+    t = add_task(client, p["id"], scripts(builder=BUILDER + BROKEN_APP))
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=APP_TIMEOUT)
+    row = task(t["id"])
+    assert row.state == TaskState.FAILED
+    assert "the app check found problems" in row.reason
+    assert "exited before the app answered" in row.reason
+    assert runs_of(t["id"])[-1].failure_kind == "app"
+    app_runs = [r for r in test_runs_of(t["id"]) if r.step == "app"]
+    assert len(app_runs) == 1 and app_runs[0].failed == 1
+
+
+async def test_a_project_without_an_app_skips_the_app_check(client, origin):
+    p = make_project(client, origin)
+    t = add_task(client, p["id"], scripts())
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    assert task(t["id"]).state == TaskState.DONE
+    assert not [r for r in test_runs_of(t["id"]) if r.step == "app"]
 
 
 async def test_failing_tests_fail_the_builder(client, origin):

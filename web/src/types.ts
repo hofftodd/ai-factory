@@ -254,7 +254,7 @@ export interface TestCase {
 export interface TestRun {
   id: number;
   task_id: number | null;
-  step: "tester" | "builder" | "acceptance";
+  step: "tester" | "builder" | "acceptance" | "app";
   commit: string;
   passed: number;
   failed: number;

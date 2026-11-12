@@ -578,6 +578,8 @@ def standard_tasks(
                 "acceptance tests in tests/acceptance/, and reports results and coverage",
                 "README.md explains what the project is, how to run it and how to test it",
                 "ARCHITECTURE.md explains how the project is organised, following the design",
+                "If the project has a server or a user interface, scripts/start.sh starts it "
+                "and it shows a first page",
             ],
             deps=[],
             kind="setup",
@@ -621,7 +623,8 @@ def standard_tasks(
         req_refs=[],
         criteria=[
             "README.md says what the project is, how to run it and how to test it, and "
-            "its run and test instructions work",
+            "its run and test instructions work (running it uses scripts/start.sh, when the "
+            "project has one)",
             "ARCHITECTURE.md describes how the finished project is organised",
         ],
         deps=[*[t.key for t in out if t.kind == "acceptance"], *[t.key for t in planned]],

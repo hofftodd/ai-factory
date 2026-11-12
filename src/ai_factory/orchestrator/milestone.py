@@ -22,7 +22,7 @@ from typing import Any
 import httpx
 from sqlmodel import col, select
 
-from ai_factory import gitops, images, sandbox, testresults
+from ai_factory import appcheck, gitops, images, sandbox, testresults
 from ai_factory.config import get_settings
 from ai_factory.core import gates, watchdog
 from ai_factory.core.models import (
@@ -124,16 +124,6 @@ async def run_acceptance(project_id: int, runtime: Runtime) -> None:
             emit(project_id, None, "test", f"acceptance: {e}", step="acceptance", passed=False)
             _failed(project_id, f"{e}\n{e.output}")
             return
-    spec = StepSpec(
-        name=f"ai-factory-acceptance{project_id}-{int(time.time() * 1000) % 10**8}",
-        workspace=clone,
-        ctl_dir=ctl,
-        command=["bash", "-lc", cmd],
-        labels={"ai-factory.project": str(project_id), "ai-factory.acceptance": "1"},
-        network=project.network,
-        image=image,
-        results_dir=results,
-    )
     if runtime.name == "docker" and project.network != "open":
         try:
             await asyncio.to_thread(sandbox.ensure_exec_network)
@@ -142,25 +132,28 @@ async def run_acceptance(project_id: int, runtime: Runtime) -> None:
             emit(project_id, None, "test", f"acceptance: {e}", step="acceptance", passed=False)
             _failed(project_id, str(e))
             return
+    if appcheck.applies(clone):
+        app_ok = await _app_check(project, runtime, clone, ctl, image, head)
+        if estop_active() or stop_requested(project_id, 0, started):
+            emit(project_id, None, "system", "acceptance check stopped")
+            return
+        if not app_ok:
+            return
     emit(project_id, None, "test", f"acceptance: $ {cmd}", step="acceptance")
-    proc = await runtime.start(spec)
-    _set_handle(project_id, proc.handle)
-    tail: list[str] = []
-    try:
-
-        async def pump() -> int:
-            async for line in proc.lines():
-                tail.append(line)
-                del tail[:-200]
-            return await proc.wait()
-
-        code = await asyncio.wait_for(pump(), ACCEPTANCE_TIMEOUT_S)
-    except TimeoutError:
-        await asyncio.to_thread(kill_handle, proc.handle)
-        code = -1
-        tail.append(f"acceptance timed out after {ACCEPTANCE_TIMEOUT_S}s")
-    finally:
-        _set_handle(project_id, "")
+    code, tail = await _run(
+        project,
+        runtime,
+        StepSpec(
+            name=f"ai-factory-acceptance{project_id}-{int(time.time() * 1000) % 10**8}",
+            workspace=clone,
+            ctl_dir=ctl,
+            command=["bash", "-lc", cmd],
+            labels={"ai-factory.project": str(project_id), "ai-factory.acceptance": "1"},
+            network=project.network,
+            image=image,
+            results_dir=results,
+        ),
+    )
     if estop_active() or stop_requested(project_id, 0, started):
         emit(project_id, None, "system", "acceptance check stopped")
         return
@@ -182,6 +175,75 @@ async def run_acceptance(project_id: int, runtime: Runtime) -> None:
             passed=False,
         )
         _failed(project_id, output)
+
+
+async def _run(project: Project, runtime: Runtime, spec: StepSpec) -> tuple[int, list[str]]:
+    """Run one container step on the acceptance clone: its exit code (-1 on timeout) and
+    the last lines of its output."""
+    assert project.id is not None
+    proc = await runtime.start(spec)
+    _set_handle(project.id, proc.handle)
+    tail: list[str] = []
+    try:
+
+        async def pump() -> int:
+            async for line in proc.lines():
+                tail.append(line)
+                del tail[:-200]
+            return await proc.wait()
+
+        code = await asyncio.wait_for(pump(), ACCEPTANCE_TIMEOUT_S)
+    except TimeoutError:
+        await asyncio.to_thread(kill_handle, proc.handle)
+        code = -1
+        tail.append(f"{spec.name} timed out after {ACCEPTANCE_TIMEOUT_S}s")
+    finally:
+        _set_handle(project.id, "")
+    return code, tail
+
+
+async def _app_check(
+    project: Project, runtime: Runtime, clone: Path, ctl: Path, image: str, head: str
+) -> bool:
+    """Before the acceptance tests: start the app on the milestone branch and look at it
+    (appcheck). A failure counts as a failed acceptance check."""
+    from ai_factory.orchestrator.runner import store_results, with_services
+
+    assert project.id is not None
+    appcheck.install(ctl)
+    results = ctl / "app-results"
+    shutil.rmtree(results, ignore_errors=True)
+    results.mkdir()
+    emit(project.id, None, "test", "app check: starting the app with scripts/start.sh", step="app")
+    _, tail = await _run(
+        project,
+        runtime,
+        StepSpec(
+            name=f"ai-factory-appcheck{project.id}-{int(time.time() * 1000) % 10**8}",
+            workspace=clone,
+            ctl_dir=ctl,
+            command=with_services(["bash", "-lc", appcheck.shell_command()]),
+            env=appcheck.env(runtime.name),
+            labels={"ai-factory.project": str(project.id), "ai-factory.acceptance": "1"},
+            network=project.network,
+            image=image,
+            results_dir=results,
+        ),
+    )
+    result = appcheck.read_result(results)
+    res = testresults.collect(results, clone)
+    if res.cases:
+        store_results(project.id, None, None, appcheck.STEP, head, res, results_dir=results)
+    emit(project.id, None, "test", f"app check: {result.summary()}", step="app", passed=result.ok)
+    if result.ok:
+        return True
+    _record(project.id, head, False)
+    _failed(
+        project.id,
+        "The app check found problems with the running app (scripts/start.sh) on the "
+        f"milestone branch:\n{result.summary()}\n\n" + "\n".join(tail[-60:]),
+    )
+    return False
 
 
 def _set_handle(project_id: int, handle: str) -> None:
@@ -241,7 +303,14 @@ async def _passed(project_id: int) -> None:
             GateKind.MILESTONE,
             f"{project.name}: milestone complete",
             f"Every task is done and the acceptance command passes on "
-            f"{project.milestone_branch}.\n\nApprove to push the branch"
+            f"{project.milestone_branch}."
+            + (
+                "\n\nScreenshots of the running app are in the app check's report on the "
+                "project's Tests tab: look at them before approving."
+                if appcheck.applies(gitops.repo_dir(project_id))
+                else ""
+            )
+            + "\n\nApprove to push the branch"
             + (" and open a pull request." if gitops.github_repo(project.repo_url) else "."),
         )
     else:

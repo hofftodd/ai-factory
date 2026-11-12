@@ -7,7 +7,7 @@ import { type ModelChoice, ModelPicker, MoreModels } from "../ModelPicker";
 import type { CoveragePoint, FEvent, PlannerJob, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
 import CoverageChart from "../CoverageChart";
 import ProgressChart, { type ProgressPoint } from "../ProgressChart";
-import { CaseList, ReportLinks, RunSummary } from "./TaskPage";
+import { AppCheck, CaseList, ReportLinks, RunSummary } from "./TaskPage";
 import PlanReview from "./PlanReview";
 import SpecWorkspace from "./SpecWorkspace";
 
@@ -425,7 +425,7 @@ function Progress({ project }: { project: Project }) {
 }
 
 function Tests({ project }: { project: Project }) {
-  const { data } = usePoll<{ suite: TestRun | null; acceptance: TestRun | null }>(`/api/projects/${project.id}/tests`, 10000);
+  const { data } = usePoll<{ suite: TestRun | null; acceptance: TestRun | null; app?: TestRun | null }>(`/api/projects/${project.id}/tests`, 10000);
   const { data: trend } = usePoll<CoveragePoint[]>(`/api/projects/${project.id}/coverage-trend`, 10000);
   const [all, setAll] = useState(false);
   const suite = data?.suite;
@@ -477,6 +477,7 @@ function Tests({ project }: { project: Project }) {
           )}
         </>
       )}
+      {data?.app && <AppCheck run={data.app} />}
       {acceptance && (
         <>
           <h3>
