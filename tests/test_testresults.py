@@ -182,3 +182,31 @@ def test_test_configuration_changes():
     assert not changed("package.json", pkg, pkg.replace('"tsc"', '"tsc -b"'))
     ignore = pkg.replace('"jest"', '"jest --testPathIgnorePatterns old"')
     assert changed("package.json", pkg, ignore)
+
+
+def test_html_report_pages_are_found_and_saved(tmp_path):
+    from ai_factory.testresults import report_pages, save_report
+
+    results = tmp_path / "results"
+    report = results / "report"
+    (report / "frontend" / "assets").mkdir(parents=True)
+    (report / "backend.html").write_text("<h1>backend</h1>")
+    (report / "frontend" / "index.html").write_text("<script src=assets/a.js></script>")
+    (report / "frontend" / "assets" / "a.js").write_text("1")
+    (report / "frontend" / "assets" / "index.html").write_text("deeper, still a page")
+    assert report_pages(report) == [
+        "backend.html",
+        "frontend/assets/index.html",
+        "frontend/index.html",
+    ]
+    dest = tmp_path / "saved"
+    assert save_report(results, dest)
+    assert (dest / "frontend" / "assets" / "a.js").read_text() == "1"
+    assert not save_report(tmp_path / "nothing", tmp_path / "saved2")
+    assert not (tmp_path / "saved2").exists()
+
+
+def test_strip_ansi():
+    from ai_factory.testresults import strip_ansi
+
+    assert strip_ansi("\x1b[2m37:19\x1b[22m \x1b[31mFAIL\x1b[0m") == "37:19 FAIL"

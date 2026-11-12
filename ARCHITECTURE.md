@@ -277,7 +277,12 @@ writes two standard files into a results folder ai-factory provides
 
 - `junit.xml`: the result of every test (JUnit XML, which pytest, Jest, Go,
   Cargo, Maven and most others can produce);
-- `coverage.xml` (Cobertura) or `lcov.info`: which lines the tests ran.
+- `coverage.xml` (Cobertura) or `lcov.info`: which lines the tests ran;
+- optionally `report/`: the framework's own HTML report (pytest-html,
+  vitest's html reporter...), one page or folder per suite. ai-factory keeps
+  it with the run and links it from the task's and the project's Tests
+  views. It is served as a sandboxed page, so its scripts can't reach the
+  dashboard's API.
 
 The Builder runs only its task's tests while it works: after it finishes,
 ai-factory runs the whole suite and sends any failure back to it.

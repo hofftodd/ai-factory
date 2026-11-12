@@ -94,9 +94,10 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
    Around that:
    - **Tests and coverage.** The Tester's `tests/run.sh` writes JUnit XML
      and Cobertura or LCOV coverage, formats almost every language's tools
-     produce. The task page's Tests tab shows its tests red then green and
-     the coverage of its changes; the project page shows the latest suite,
-     the acceptance tests and coverage over time.
+     produce, plus the framework's own HTML report when it has one. The task
+     page's Tests tab shows its tests red then green, the coverage of its
+     changes and a link to each run's HTML report; the project page shows the
+     latest suite, the acceptance tests and coverage over time.
    - **Toolchain.** Containers start from `ai-factory/executor-base` (Ubuntu,
      git, pi and OpenCode, no language runtimes on PATH). The Environment
      Agent's `.ai-factory/Dockerfile` (`FROM ai-factory/executor-base`) is built

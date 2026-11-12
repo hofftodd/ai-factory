@@ -7,7 +7,7 @@ import { type ModelChoice, ModelPicker, MoreModels } from "../ModelPicker";
 import type { CoveragePoint, FEvent, PlannerJob, PlanRevision, Project, ProjectPhase, RoleInfo, SystemInfo, Task, TaskState, TestRun } from "../types";
 import CoverageChart from "../CoverageChart";
 import ProgressChart, { type ProgressPoint } from "../ProgressChart";
-import { CaseList, RunSummary } from "./TaskPage";
+import { CaseList, ReportLinks, RunSummary } from "./TaskPage";
 import PlanReview from "./PlanReview";
 import SpecWorkspace from "./SpecWorkspace";
 
@@ -448,6 +448,7 @@ function Tests({ project }: { project: Project }) {
             <span className="mono">{suite.commit.slice(0, 8)}</span>
           </div>
           <RunSummary run={suite} />
+          <ReportLinks run={suite} />
           <CoverageChart points={trend ?? []} />
           <div className="row">
             <h3>{all ? "All tests" : "Failing tests"}</h3>
@@ -484,6 +485,7 @@ function Tests({ project }: { project: Project }) {
               {acceptance.passed} of {acceptance.passed + acceptance.failed + acceptance.errors} passing
             </span>
           </h3>
+          <ReportLinks run={acceptance} />
           <CaseList cases={acceptance.cases ?? []} />
         </>
       )}

@@ -15,6 +15,7 @@ changed ("changed-line coverage").
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -141,6 +142,51 @@ def parse_lcov(text: str, root: str = "") -> dict[str, dict[int, int]]:
         elif line.strip() == "end_of_record":
             current = None
     return out
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    """`text` without terminal colour and cursor codes."""
+    return _ANSI.sub("", text)
+
+
+# The test runner may write an HTML report here, in $AI_FACTORY_RESULTS: one page or
+# folder per suite (pytest-html, vitest's html reporter, jest-html-reporters...).
+REPORT_DIR = "report"
+# A report bigger than this is not kept.
+REPORT_MAX_BYTES = 50 * 1024 * 1024
+
+
+def report_pages(report: Path) -> list[str]:
+    """The entry pages of a saved HTML report, relative to it: the .html files at its top
+    and each folder's index.html."""
+    if not report.is_dir():
+        return []
+    pages = [p.name for p in report.glob("*.html") if p.is_file()]
+    pages += [
+        p.relative_to(report).as_posix()
+        for p in report.glob("*/**/index.html")
+        if p.is_file() and len(p.relative_to(report).parts) <= 3
+    ]
+    return sorted(set(pages))
+
+
+def save_report(results_dir: Path, dest: Path) -> bool:
+    """Copy the runner's HTML report (results_dir/report) to `dest`. False when there is
+    none, it has no page, or it is too big."""
+    src = results_dir / REPORT_DIR
+    if not report_pages(src):
+        return False
+    files = [p for p in src.rglob("*") if p.is_file() and not p.is_symlink()]
+    if sum(p.stat().st_size for p in files) > REPORT_MAX_BYTES:
+        return False
+    for p in files:
+        target = dest / p.relative_to(src)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(p, target)
+    return True
 
 
 def collect(results_dir: Path, workspace: Path) -> Results:

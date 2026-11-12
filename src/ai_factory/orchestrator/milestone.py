@@ -86,7 +86,7 @@ def _store(project: Project, head: str, results: Path, clone: Path) -> None:
     res = testresults.collect(results, clone)
     if res.cases:
         assert project.id is not None
-        store_results(project.id, None, None, "acceptance", head, res)
+        store_results(project.id, None, None, "acceptance", head, res, results_dir=results)
 
 
 async def run_acceptance(project_id: int, runtime: Runtime) -> None:
@@ -220,8 +220,8 @@ def _failed(project_id: int, output: str) -> None:
         project_id,
         GateKind.ESCALATION,
         "Acceptance tests keep failing",
-        f"All tasks are done but `{project.acceptance_cmd}` fails "
-        f"({project.acceptance_failures} time(s)).\n\n{output[-2000:]}\n\n"
+        f"All tasks are done but `{acceptance_command(project)}` fails "
+        f"({project.acceptance_failures} time(s)).\n\n{testresults.strip_ansi(output)[-2000:]}\n\n"
         "Approve to let the replanner try again, or reject to leave it for you to fix.",
         payload={"acceptance": True},
     )

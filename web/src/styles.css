@@ -512,3 +512,11 @@ a.stat:hover { border-color: var(--accent); }
 .role ul { list-style: none; padding: 0; margin: 6px 0 0; }
 .role .may li { color: var(--text); }
 .role .may-not li { color: var(--muted); }
+
+.report-links {
+  display: inline-block;
+  margin: 4px 0 8px;
+}
+.report-links.failing a {
+  font-weight: 600;
+}

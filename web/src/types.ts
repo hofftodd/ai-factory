@@ -268,6 +268,8 @@ export interface TestRun {
   problem: string;
   created_at: number;
   cases?: TestCase[];
+  /** Entry pages of the test runner's HTML report, relative to its folder. */
+  report?: string[];
 }
 
 export interface CoveragePoint {

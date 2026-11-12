@@ -501,3 +501,30 @@ async def test_new_task_reopens_a_finished_project(client, origin):
             task(t["id"]).state == TaskState.DONE and project(p["id"]).phase == ProjectPhase.DONE
         ),
     )
+
+
+async def test_acceptance_gate_names_the_runner_and_links_the_report(client, origin, llm, planner):
+    p = auto_project(client, origin, llm, watchdog={"replan": True, "max_acceptance_failures": 0})
+    runner = (
+        "mkdir -p tests/acceptance && cat > tests/acceptance/run.sh <<'EOF'\n"
+        "printf '\\033[31mFAIL\\033[0m acceptance\\n'\n"
+        'mkdir -p "$AI_FACTORY_RESULTS/report"\n'
+        'echo "<h1>acceptance report</h1>" > "$AI_FACTORY_RESULTS/report/index.html"\n'
+        'printf \'<testsuite><testcase name="t" classname="tests.acceptance.a">'
+        '<failure message="no"/></testcase></testsuite>\' > "$AI_FACTORY_RESULTS/junit.xml"\n'
+        "exit 1\n"
+        "EOF"
+    )
+    make_task(client, p["id"], script=runner)
+    orch = Orchestrator()
+    await drive(orch, lambda: bool(gates_of(p["id"], GateKind.ESCALATION)), timeout=40)
+    gate = gates_of(p["id"], GateKind.ESCALATION)[-1]
+    assert "`sh tests/acceptance/run.sh` fails" in gate.detail
+    assert "FAIL acceptance" in gate.detail and "\x1b" not in gate.detail
+    acceptance = client.get(f"/api/projects/{p['id']}/tests").json()["acceptance"]
+    assert acceptance["report"] == ["index.html"]
+    page = client.get(f"/api/test-runs/{acceptance['id']}/report/index.html")
+    assert page.status_code == 200 and "acceptance report" in page.text
+    assert page.headers["content-security-policy"].startswith("sandbox")
+    outside = f"/api/test-runs/{acceptance['id']}/report/../../ai-factory.db"
+    assert client.get(outside).status_code == 404
