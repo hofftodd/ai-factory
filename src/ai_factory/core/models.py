@@ -68,6 +68,8 @@ class GateKind(StrEnum):
     COVERAGE = "coverage"  # a task's changed lines are under-tested; merge anyway or send back
     # a task's new tests all passed before any work: merge the tests, or back to the Tester
     ALREADY_BUILT = "already_built"
+    # the Reviewer still objects after max_review_rounds: merge anyway or back to the Builder
+    REVIEW = "review"
 
 
 class GateState(StrEnum):

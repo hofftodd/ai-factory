@@ -7,7 +7,13 @@ import type { Project, Task, TestCase, TestRun } from "../types";
 
 type Tab = "log" | "tests" | "diff" | "details";
 
-const STEP_LABEL: Record<string, string> = { tester: "Tester", builder: "Builder", acceptance: "Acceptance", app: "App check" };
+const STEP_LABEL: Record<string, string> = {
+  tester: "Tester",
+  builder: "Builder",
+  reviewer: "Reviewer",
+  acceptance: "Acceptance",
+  app: "App check",
+};
 
 export function pct(n: number | null | undefined) {
   return n == null ? "—" : `${Math.round(n)}%`;

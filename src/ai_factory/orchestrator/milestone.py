@@ -26,6 +26,7 @@ from ai_factory import appcheck, gitops, images, sandbox, testresults
 from ai_factory.config import get_settings
 from ai_factory.core import gates, watchdog
 from ai_factory.core.models import (
+    Event,
     GateKind,
     JobState,
     PlannerJob,
@@ -289,6 +290,20 @@ def _failed(project_id: int, output: str) -> None:
     )
 
 
+def review_notes(project_id: int, limit: int = 15) -> str:
+    """The Reviewer's notes that didn't block a merge, for the milestone checkpoint."""
+    with session() as s:
+        events = s.exec(
+            select(Event)
+            .where(Event.project_id == project_id, Event.kind == "review")
+            .order_by(col(Event.id).desc())
+        ).all()
+    notes = [str(e.data["note"]) for e in events if e.data.get("note")][:limit]
+    if not notes:
+        return ""
+    return "\n\nThe Reviewer's notes (not blocking):\n" + "\n".join(f"- {n}" for n in notes)
+
+
 async def _passed(project_id: int) -> None:
     with session() as s:
         project = s.get(Project, project_id)
@@ -310,6 +325,7 @@ async def _passed(project_id: int) -> None:
                 if appcheck.applies(gitops.repo_dir(project_id))
                 else ""
             )
+            + review_notes(project_id)
             + "\n\nApprove to push the branch"
             + (" and open a pull request." if gitops.github_repo(project.repo_url) else "."),
         )

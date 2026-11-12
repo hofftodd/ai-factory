@@ -6,6 +6,9 @@ A project's ``gates`` setting turns the optional checkpoints on or off:
     replan_approval approve every plan revision from the replanner  (default off)
     task_merge      approve each validated task before it merges    (default off)
     milestone       approve before the milestone is pushed / PR'd   (default on)
+    review          the Reviewer Agent reviews each task before it merges (default on;
+                    a check by an agent, not a person: it asks you only when the
+                    Reviewer still objects after max_review_rounds)
 
 Always on, whatever the settings: spec approval, spec changes proposed by the
 replanner, plan growth beyond the cap, and blocked tasks.
@@ -36,6 +39,7 @@ DEFAULTS: dict[str, bool] = {
     "replan_approval": False,
     "task_merge": False,
     "milestone": True,
+    "review": True,
 }
 
 

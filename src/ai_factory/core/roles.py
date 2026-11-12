@@ -27,6 +27,7 @@ TASK_PLANNER = "task_planner"
 TESTER = "tester"
 BUILDER = "builder"
 ENVIRONMENT = "environment"
+REVIEWER = "reviewer"
 ESCALATION = "escalation"
 
 # The toolchain image's directory: only the Environment Agent writes it.
@@ -119,10 +120,30 @@ ROLES: dict[str, Role] = {
         ),
         (BUILDER, "executor"),
     ),
+    REVIEWER: Role(
+        REVIEWER,
+        "Reviewer Agent",
+        "Reviews each task's change against the requirements and design before it merges.",
+        (
+            "read the task, the planning documents and the change",
+            "read the repository's files (read-only)",
+            "send the change back to the Builder with what blocks the merge",
+        ),
+        ("write code, tests or documents", "change tasks"),
+        (REVIEWER, TASK_PLANNER, "planner"),
+    ),
 }
 
 # Every binding key a project may set (the dashboard shows these).
-BINDING_KEYS = (PROJECT_PLANNER, TASK_PLANNER, ENVIRONMENT, TESTER, BUILDER, ESCALATION)
+BINDING_KEYS = (
+    PROJECT_PLANNER,
+    TASK_PLANNER,
+    ENVIRONMENT,
+    TESTER,
+    BUILDER,
+    REVIEWER,
+    ESCALATION,
+)
 
 
 def binding(project: Project, role: str) -> dict[str, Any]:

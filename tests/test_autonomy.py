@@ -36,12 +36,20 @@ class Planner:
     def __init__(self) -> None:
         self.splits: list[Any] = []
         self.reviews: list[Any] = []
+        self.code_reviews: list[Any] = []  # the Reviewer Agent's answers
         self.chat = "ok"  # Project Planner turns
         self.calls: list[str] = []
 
     def __call__(self, req: dict[str, Any]) -> str:
         sys = system_text(req)
-        if "Split it into" in sys:
+        if "You are the Reviewer Agent" in sys:
+            self.calls.append("code_review")
+            out = (
+                self.code_reviews.pop(0)
+                if self.code_reviews
+                else {"verdict": "pass", "blocking": [], "notes": []}
+            )
+        elif "Split it into" in sys:
             self.calls.append("split")
             out = self.splits.pop(0) if self.splits else "[]"
         elif "reviewing the plan" in sys:
@@ -528,3 +536,82 @@ async def test_acceptance_gate_names_the_runner_and_links_the_report(client, ori
     assert page.headers["content-security-policy"].startswith("sandbox")
     outside = f"/api/test-runs/{acceptance['id']}/report/../../ai-factory.db"
     assert client.get(outside).status_code == 404
+
+
+# -- the Reviewer Agent ------------------------------------------------------------
+
+
+def reviewed_project(client, origin, llm, **kw):
+    from tests.test_pipeline import add_task, scripts
+
+    p = auto_project(client, origin, llm, **kw)
+    return p, add_task(client, p["id"], scripts())
+
+
+async def test_the_reviewer_passes_a_good_change(client, origin, llm, planner):
+    planner.code_reviews = [{"verdict": "pass", "blocking": [], "notes": ["name it greet()"]}]
+    p, t = reviewed_project(client, origin, llm)
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    assert task(t["id"]).state == TaskState.DONE
+    assert planner.calls.count("code_review") == 1
+    steps = [r.step for r in runs_of(t["id"])]
+    assert steps == ["tester", "builder", "reviewer"]
+    from ai_factory.orchestrator.milestone import review_notes
+
+    assert "name it greet()" in review_notes(p["id"])
+
+
+async def test_blocking_findings_go_back_to_the_builder(client, origin, llm, planner):
+    planner.code_reviews = [
+        {"verdict": "changes", "blocking": ["greet.sh ignores the design's Greeter"]},
+        {"verdict": "pass", "blocking": []},
+    ]
+    _, t = reviewed_project(client, origin, llm)
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    assert task(t["id"]).state == TaskState.DONE
+    runs = runs_of(t["id"])
+    assert [r.step for r in runs] == ["tester", "builder", "reviewer", "builder", "reviewer"]
+    rejected = runs[2]
+    assert rejected.failure_kind == "review"
+    assert "greet.sh ignores the design's Greeter" in rejected.reason
+
+
+async def test_a_reviewer_that_keeps_objecting_asks_the_user(client, origin, llm, planner):
+    objection = {"verdict": "changes", "blocking": ["still a list, not a graph"]}
+    planner.code_reviews = [objection, objection]
+    p, t = reviewed_project(client, origin, llm)
+    stopped = TERMINAL | {TaskState.AWAITING_MERGE}
+    await drive(Orchestrator(), lambda: task(t["id"]).state in stopped)
+    assert task(t["id"]).state == TaskState.AWAITING_MERGE
+    (gate,) = gates_of(p["id"], GateKind.REVIEW)
+    assert "still a list, not a graph" in gate.detail
+    # Approving merges it anyway.
+    client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})
+    await drive(Orchestrator(), lambda: task(t["id"]).state == TaskState.DONE)
+
+
+async def test_rejecting_the_reviewer_gate_sends_the_task_to_the_builder(
+    client, origin, llm, planner
+):
+    objection = {"verdict": "changes", "blocking": ["no styling at all"]}
+    planner.code_reviews = [objection, objection]
+    p, t = reviewed_project(client, origin, llm)
+    await drive(Orchestrator(), lambda: task(t["id"]).state == TaskState.AWAITING_MERGE)
+    (gate,) = gates_of(p["id"], GateKind.REVIEW)
+    planner.code_reviews = [{"verdict": "pass", "blocking": []}]
+    client.post(
+        f"/api/gates/{gate.id}/resolve", json={"approve": False, "note": "use the design system"}
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    assert task(t["id"]).state == TaskState.DONE
+    runs = runs_of(t["id"])
+    assert runs[-2].step == "builder" and runs[-1].step == "reviewer"
+    sent_back = [r for r in runs if r.step == "reviewer" and r.state == "failed"][-1]
+    assert "use the design system" in sent_back.reason
+
+
+async def test_the_review_checkpoint_can_be_turned_off(client, origin, llm, planner):
+    _, t = reviewed_project(client, origin, llm, gates={"milestone": False, "review": False})
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    assert task(t["id"]).state == TaskState.DONE
+    assert "code_review" not in planner.calls
