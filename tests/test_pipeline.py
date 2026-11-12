@@ -192,6 +192,7 @@ async def test_every_task_needs_tests(client, origin):
     assert "the Tester added no tests" in task(t["id"]).reason
 
 
+APP_TIMEOUT = 180
 # A Builder that also writes scripts/start.sh: a page served on $APP_PORT.
 APP = """mkdir -p scripts www
 printf '#!/bin/sh\\nexec python3 -m http.server "$APP_PORT" --bind 127.0.0.1 --directory www\\n' \\
@@ -208,7 +209,8 @@ printf '#!/bin/sh\\necho "cannot find module server"\\nexit 1\\n' > scripts/star
 async def test_a_working_app_passes_the_app_check(client, origin):
     p = make_project(client, origin)
     t = add_task(client, p["id"], scripts(builder=BUILDER + APP))
-    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    # Starting the app and a browser (or node) is slow on hosted CI runners.
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=APP_TIMEOUT)
     assert task(t["id"]).state == TaskState.DONE, task(t["id"]).reason
     app_runs = [r for r in test_runs_of(t["id"]) if r.step == "app"]
     assert len(app_runs) == 1 and app_runs[0].passed >= 1 and app_runs[0].failed == 0
@@ -218,7 +220,7 @@ async def test_a_working_app_passes_the_app_check(client, origin):
 async def test_an_app_that_wont_start_goes_back_to_the_builder(client, origin):
     p = make_project(client, origin)
     t = add_task(client, p["id"], scripts(builder=BUILDER + BROKEN_APP))
-    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=APP_TIMEOUT)
     row = task(t["id"])
     assert row.state == TaskState.FAILED
     assert "the app check found problems" in row.reason
