@@ -552,6 +552,12 @@ function Milestone({ project }: { project: Project }) {
           Pull request: <a href={project.milestone_pr_url}>{project.milestone_pr_url}</a>
         </div>
       )}
+      <div className="small">
+        <a href={`/api/projects/${project.id}/report`} target="_blank" rel="noreferrer">
+          Run report
+        </a>{" "}
+        <span className="muted">where the time went, failures by cause, stalls</span>
+      </div>
     </section>
   );
 }

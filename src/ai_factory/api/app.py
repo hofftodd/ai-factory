@@ -15,13 +15,13 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete
 from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
-from ai_factory import github, gitops, residency, testresults
+from ai_factory import github, gitops, report, residency, testresults
 from ai_factory.api.inbox import router as inbox_router
 from ai_factory.api.schemas import (
     ControlRequest,
@@ -620,6 +620,13 @@ def test_report(run_id: int, path: str) -> FileResponse:
     if not f.is_relative_to(root) or not f.is_file():
         raise HTTPException(404, "no such report file")
     return FileResponse(f, headers=REPORT_HEADERS)
+
+
+@router.get("/api/projects/{project_id}/report", response_class=PlainTextResponse)
+def project_report(project_id: int) -> str:
+    """The run report (markdown): where the time went and why attempts failed."""
+    _get(Project, project_id)
+    return report.save(project_id).read_text()
 
 
 @router.get("/api/projects/{project_id}/tests")

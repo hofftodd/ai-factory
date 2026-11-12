@@ -9,6 +9,7 @@ ai-factory claude-nodes  add Claude Opus / Sonnet / Haiku nodes from $ANTHROPIC_
                       (--project ID also assigns them to that project's roles)
 ai-factory vm ACTION     macOS: the Lima VM containers run in (start|stop|status|shell|delete)
 ai-factory doctor        check that this host can run executors
+ai-factory report ID     the run report of project ID: time, failures by cause, stalls
 """
 
 from __future__ import annotations
@@ -119,8 +120,14 @@ def _doctor(args: list[str]) -> None:
     doctor_main(args)
 
 
+def _report(args: list[str]) -> None:
+    from ai_factory.report import main as report_main
+
+    report_main(args)
+
+
 # Commands that take further arguments.
-ARG_COMMANDS = {"vm": _vm, "doctor": _doctor}
+ARG_COMMANDS = {"vm": _vm, "doctor": _doctor, "report": _report}
 
 COMMANDS = {
     "up": _up,

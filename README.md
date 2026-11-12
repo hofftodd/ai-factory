@@ -181,6 +181,16 @@ milestone, a reached spend cap) collects in one inbox, with optional push notifi
 with only the always-on ones, a project runs from approved documents to pull
 request by itself.
 
+**Run report.** `ai-factory report PROJECT_ID` (or *Run report* on the
+project page) shows where a run's time went and why attempts failed: tasks,
+splits and replanned additions, runs per agent, tokens and spend, failed
+attempts by cause (the agent's work, parallel tasks colliding, ai-factory
+itself, the project's setup, a limit you set), per-task wall time, stalls of
+20 minutes or more with nothing running (and whether a checkpoint was waiting
+for you), the Reviewer's verdicts and the app checks. When you resolve a
+blocked task you can mark its failure as an ai-factory bug, so the report
+counts it as one.
+
 Throughout: a live dashboard (task board, streaming planning and agent output,
 diffs, run history) and **Pause / Stop / E-stop** at task, project and global
 level, enforced by a separate supervisor process that works even if the

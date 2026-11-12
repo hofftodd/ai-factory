@@ -20,14 +20,16 @@ const ACTIONS: Record<GateKind, { label: string; approve: string; reject: string
 
 function GateCard({ g, onDone }: { g: Gate; onDone: () => void }) {
   const [note, setNote] = useState("");
+  const [factoryBug, setFactoryBug] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const a = ACTIONS[g.kind];
+  const blockedTask = g.kind === "escalation" && !!g.task_id;
   const decide = async (approve: boolean, action = "") => {
     setBusy(true);
     setError("");
     try {
-      await post(`/api/gates/${g.id}/resolve`, { approve, note, action });
+      await post(`/api/gates/${g.id}/resolve`, { approve, note, action, factory_bug: blockedTask && factoryBug });
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -52,6 +54,12 @@ function GateCard({ g, onDone }: { g: Gate; onDone: () => void }) {
       </div>
       <h3>{g.title}</h3>
       {g.detail && <pre className="gate-detail">{g.detail}</pre>}
+      {blockedTask && (
+        <label className="small">
+          <input type="checkbox" checked={factoryBug} onChange={(e) => setFactoryBug(e.target.checked)} /> This
+          was an ai-factory bug, not the agent's fault (counted as such in the run report)
+        </label>
+      )}
       <ErrorNote error={error} />
       <div className="actions">
         <input className="grow" placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />

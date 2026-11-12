@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import col, select
 
-from ai_factory.core import gates
-from ai_factory.core.models import Gate, GateState, Project, Task
+from ai_factory.core import causes, gates
+from ai_factory.core.models import Gate, GateState, Project, RunState, Task, TaskRun
 from ai_factory.db import session
 
 router = APIRouter()
@@ -20,6 +20,9 @@ class Decision(BaseModel):
     note: str = ""
     # For a blocked task: "send_back" asks the Tester to write its tests again.
     action: str = ""
+    # For a blocked task: its last failure was an ai-factory bug, not the agent's (the run
+    # report counts it as a factory failure).
+    factory_bug: bool = False
 
 
 def _out(g: Gate, names: dict[int, str], titles: dict[int, str]) -> dict[str, Any]:
@@ -56,4 +59,20 @@ def resolve_gate(gate_id: int, body: Decision) -> Gate:
     gate = gates.resolve(gate_id, body.approve, body.note, action=body.action)
     if gate is None:
         raise HTTPException(409, "this checkpoint is not waiting for a decision")
+    if body.factory_bug and gate.task_id is not None:
+        mark_factory_bug(gate.task_id)
     return gate
+
+
+def mark_factory_bug(task_id: int) -> None:
+    """The task's last failed attempt was ai-factory's fault, not the agent's."""
+    with session() as s:
+        run = s.exec(
+            select(TaskRun)
+            .where(TaskRun.task_id == task_id, TaskRun.state == RunState.FAILED)
+            .order_by(col(TaskRun.id).desc())
+        ).first()
+        if run is not None:
+            run.cause_override = causes.FACTORY
+            s.add(run)
+            s.commit()
