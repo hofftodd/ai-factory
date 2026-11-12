@@ -16,7 +16,8 @@ const path = require("path");
 const base = (process.env.APP_URL || "http://127.0.0.1:8799").replace(/\/$/, "");
 const results = process.env.AI_FACTORY_RESULTS || path.join(process.cwd(), "results");
 const reportDir = path.join(results, "report", "app");
-const pages = process.argv.slice(2).length ? process.argv.slice(2) : ["/"];
+// Each page once (tests/app-pages.txt often lists / too), / first.
+const pages = [...new Set(["/", ...process.argv.slice(2)].map((p) => (p.startsWith("/") ? p : "/" + p)))];
 const PAGE_TIMEOUT_MS = 30000;
 const SETTLE_MS = 750;
 const VIEWPORT = { width: 1440, height: 900 };

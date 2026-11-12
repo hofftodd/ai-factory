@@ -323,6 +323,19 @@ RESULTS_CONTRACT = [
     "There is no internet access: use only what the toolchain image provides.",
     "",
 ]
+NO_INTERNET = RESULTS_CONTRACT[-2]
+
+# How unit tests are written, for every Tester task but the acceptance tests.
+UNIT_TESTS = [
+    "## Unit tests",
+    "Write unit and integration tests in each module's own test framework, next to that "
+    "module's other tests: JUnit under `src/test/` for Kotlin or Java (e.g. Spring Boot "
+    "`@SpringBootTest`/`@WebMvcTest` for an API), `*.spec.ts` beside an Angular "
+    "component, pytest under `tests/`. Test behaviour by running the code: never by "
+    "searching its source for names or text (a `grep` of the code isn't a test), and "
+    "never in a shell script when the module has a test framework.",
+    "",
+]
 
 SERVICES_SCRIPT = "tests/services.sh"
 APP_START = "scripts/start.sh"
@@ -392,6 +405,15 @@ KIND_NOTES = {
             "Create `tests/run.sh` following the contract below, and a first smoke test that "
             "checks the project's entry point exists. The Builder writes the skeleton "
             "afterwards to make it pass.",
+            "Also write one first unit test in each module's own test framework (e.g. a "
+            "JUnit test of the back end's health or a first endpoint under its `src/test/`, "
+            "an Angular `app.component.spec.ts` that creates the root component), and make "
+            "`tests/run.sh` run them. Later tasks add their tests next to these, so these "
+            "prove each framework, its JUnit XML and its coverage work. Make every runner "
+            "put each test's file (or, for JUnit, its class) in the JUnit XML: ai-factory "
+            "uses it to find which tests a task added. A Karma reporter, for instance, "
+            "should write the spec's file into `file` and its top-level `describe` into "
+            "`classname`.",
             "`tests/run.sh` must leave `tests/acceptance/` out (e.g. pytest "
             "`--ignore=tests/acceptance`): the acceptance tests are written next, run on "
             "their own and fail until the whole project is finished.",
@@ -452,7 +474,12 @@ KIND_NOTES = {
             "tools.",
             "If the project has a server or a user interface, write `scripts/start.sh` "
             '(see "The running app" below) so the skeleton already starts and shows a page, '
-            "and have README.md's run instructions use it.",
+            "and have README.md's run instructions use it. When the design says how the app "
+            "is served (e.g. the front end built and served by the back end), start it that "
+            "way from the start, not with a placeholder page.",
+            "Use the build tools the design names (e.g. Gradle when it says Gradle), and set "
+            "up each module's test framework and coverage so the Tester's first unit tests "
+            "run.",
             "",
         ],
         "seed": [
@@ -593,7 +620,9 @@ def build_role_pack(
             "",
         ]
     lines += SEARCH_TOOLS
-    lines += RESULTS_CONTRACT
+    lines += [line for line in RESULTS_CONTRACT if project.network != "open" or line != NO_INTERNET]
+    if role == "tester" and task.kind not in ("acceptance", "docs"):
+        lines += UNIT_TESTS
     if role == "tester":
         lines += test_note_lines(project, setup=task.kind == "setup")
     if (repo / SERVICES_SCRIPT).is_file():

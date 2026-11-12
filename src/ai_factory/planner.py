@@ -616,6 +616,9 @@ def standard_tasks(
                 "ARCHITECTURE.md explains how the project is organised, following the design",
                 "If the project has a server or a user interface, scripts/start.sh starts it "
                 "and it shows a first page",
+                "Each module has a first unit test in its own test framework (e.g. JUnit, "
+                "Karma/Jasmine, pytest) that tests/run.sh runs, so later tasks add theirs "
+                "next to it",
             ],
             deps=[],
             kind="setup",
