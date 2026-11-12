@@ -7,7 +7,7 @@ import type { Project, Task, TestCase, TestRun } from "../types";
 
 type Tab = "log" | "tests" | "diff" | "details";
 
-const STEP_LABEL: Record<string, string> = { tester: "Tester", builder: "Builder", acceptance: "Acceptance" };
+const STEP_LABEL: Record<string, string> = { tester: "Tester", builder: "Builder", acceptance: "Acceptance", app: "App check" };
 
 export function pct(n: number | null | undefined) {
   return n == null ? "—" : `${Math.round(n)}%`;
@@ -85,15 +85,37 @@ export function RunSummary({ run }: { run: TestRun }) {
   );
 }
 
+/** The latest app check: the app started with scripts/start.sh, its pages in a browser. */
+export function AppCheck({ run }: { run: TestRun }) {
+  const failing = run.failed + run.errors;
+  return (
+    <div className="app-check">
+      <h3>
+        App check <span className="muted small">{fmtTime(run.created_at)}</span>
+      </h3>
+      <p className={failing ? "bad-text" : "ok-text"}>
+        {failing
+          ? "The running app has problems."
+          : `The app started and ${run.passed} page${run.passed === 1 ? "" : "s"} showed no problems.`}{" "}
+        <ReportLinks run={run} label="Screenshots" />
+      </p>
+      {failing > 0 && <CaseList cases={run.cases ?? []} />}
+    </div>
+  );
+}
+
 function TestsView({ taskId, live }: { taskId: number; live: boolean }) {
   const { data, error } = usePoll<{ runs: TestRun[] }>(`/api/tasks/${taskId}/tests`, live ? 3000 : 30000);
   if (error) return <ErrorNote error={error} />;
   if (!data) return <div className="muted">Loading…</div>;
   if (!data.runs.length) return <div className="muted">No test results yet. The Tester writes this task's tests first.</div>;
-  const latest = data.runs[0];
+  // The app check is shown on its own: "latest run" is the latest run of the suite.
+  const latest = data.runs.find((r) => r.step !== "app") ?? data.runs[0];
+  const app = data.runs.find((r) => r.step === "app");
   const files = Object.entries(latest.files);
   return (
     <div className="tests-view">
+      {app && <AppCheck run={app} />}
       <h3>
         Latest run: {STEP_LABEL[latest.step]} step <span className="muted small">{fmtTime(latest.created_at)}</span>
       </h3>

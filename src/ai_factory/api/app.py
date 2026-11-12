@@ -625,7 +625,7 @@ def test_report(run_id: int, path: str) -> FileResponse:
 @router.get("/api/projects/{project_id}/tests")
 def project_tests(project_id: int) -> dict[str, Any]:
     """The latest full-suite result for the project (the last merged task's verify run, or
-    the latest acceptance check), with its cases."""
+    the latest acceptance check), and the latest app check, with their cases."""
     _get(Project, project_id)
     with session() as s:
         latest = s.exec(
@@ -638,9 +638,15 @@ def project_tests(project_id: int) -> dict[str, Any]:
             .where(TestRun.project_id == project_id, TestRun.step == "acceptance")
             .order_by(col(TestRun.id).desc())
         ).first()
+        app = s.exec(
+            select(TestRun)
+            .where(TestRun.project_id == project_id, TestRun.step == "app")
+            .order_by(col(TestRun.id).desc())
+        ).first()
     return {
         "suite": _run_out(latest, _cases(latest.id)) if latest else None,
         "acceptance": _run_out(acceptance, _cases(acceptance.id)) if acceptance else None,
+        "app": _run_out(app, _cases(app.id)) if app else None,
     }
 
 

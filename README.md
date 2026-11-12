@@ -89,6 +89,13 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      coverage are recorded. If too few of the changed lines are covered
      (default minimum 80%), the task goes back to the Tester once, then asks
      you. The setup task's skeleton only reports coverage.
+   - **App check:** for a project with a server or UI, ai-factory starts
+     the app the way a person would (`scripts/start.sh`, which the Builder
+     writes at setup) and opens `/` and the pages the Tester lists in
+     `tests/app-pages.txt` in headless Chromium. An app that doesn't start, a
+     blank page, console or uncaught errors, failed requests, or a page that
+     scrolls far sideways send the task back to the Builder with what was
+     seen. Screenshots appear on the task's Tests tab.
    - **Merge** into the milestone branch.
 
    Around that:
@@ -142,10 +149,11 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      tasks are kept and not redone, setup isn't repeated, and the acceptance
      tests are updated only if their criteria changed. Approving the new plan
      discards the old plan's unfinished tasks.
-7. **Done.** When every task is done, the acceptance tests run on a fresh
-   checkout of the milestone branch. If they fail, the Task Planner gets the
-   output and adds work. If they pass, the project is done, and after your
-   approval the branch is pushed and a GitHub pull request is opened.
+7. **Done.** When every task is done, the app check and then the acceptance
+   tests run on a fresh checkout of the milestone branch. If either fails,
+   the Task Planner gets the output and adds work. If they pass, the project
+   is done; you look at the app's screenshots, and after your approval the
+   branch is pushed and a GitHub pull request is opened.
 
 **Needs you.** Everything waiting for a decision (blocked tasks, plan
 revisions over the cap, document changes, low coverage, optional merge

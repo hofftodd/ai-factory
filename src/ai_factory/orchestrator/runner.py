@@ -21,7 +21,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from ai_factory import gitops, images, sandbox, testresults
+from ai_factory import appcheck, gitops, images, sandbox, testresults
 from ai_factory.config import get_settings
 from ai_factory.core import gates, roles, watchdog
 from ai_factory.core.contextpack import build_pack, build_role_pack
@@ -1136,6 +1136,51 @@ class TaskRunner:
                 f"tests fail: {failing} of {run.passed + failing} failed",
                 "\n".join(self._tail),
                 kind="validation",
+            )
+        await self._app_check(project, clone)
+
+    async def _app_check(self, project: Project, clone: Path) -> None:
+        """Start the app with scripts/start.sh and look at it in a browser (appcheck). A
+        project without the script has no app to check. Problems go back to the Builder."""
+        if not appcheck.applies(clone):
+            return
+        task = self._check()
+        appcheck.install(self.run_dir / "ctl")
+        results_dir = self._results_dir(appcheck.STEP)
+        self._emit("test", "app check: starting the app with scripts/start.sh", step="app")
+        await self._step(
+            "app",
+            with_services(["bash", "-lc", appcheck.shell_command()]),
+            appcheck.env(self.runtime.name),
+            "test",
+            appcheck.CHECK_TIMEOUT_S,
+            results_dir=results_dir,
+        )
+        await asyncio.to_thread(gitops.clean_tree, clone)
+        result = appcheck.read_result(results_dir)
+        res = await asyncio.to_thread(testresults.collect, results_dir, clone)
+        test_run = store_results(
+            task.project_id,
+            self.task_id,
+            self.run_id,
+            appcheck.STEP,
+            gitops.head(clone),
+            res,
+            results_dir=results_dir,
+        )
+        self._emit(
+            "test",
+            f"app check: {result.summary()}",
+            step="app",
+            test_run=test_run.id,
+            passed=result.ok,
+        )
+        if not result.ok:
+            raise StepFailed(
+                "the app check found problems with the running app (scripts/start.sh):\n"
+                + result.summary(),
+                "\n".join(self._tail),
+                kind="app",
             )
 
     def _results_dir(self, name: str) -> Path:

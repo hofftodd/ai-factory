@@ -325,6 +325,7 @@ RESULTS_CONTRACT = [
 ]
 
 SERVICES_SCRIPT = "tests/services.sh"
+APP_START = "scripts/start.sh"
 
 SERVICES_CONTRACT = [
     "## Services the tests need",
@@ -337,6 +338,33 @@ SERVICES_CONTRACT = [
     "starts; `tests/run.sh` should source it too rather than start them a second way.",
     "",
 ]
+
+
+APP_CONTRACT = {
+    "builder": [
+        "## The running app",
+        "If the project has a server or a user interface, `scripts/start.sh` starts it the "
+        "way a person would: in the foreground, serving the app (its user interface, when it "
+        "has one) on `http://127.0.0.1:$APP_PORT`, with everything it needs (building the "
+        "front end, creating the database schema...). It may source `tests/services.sh` for "
+        "the services it uses.",
+        "After the suite passes, ai-factory runs `scripts/start.sh`, opens the app's pages "
+        "in a headless browser and sends the task back to you if the app doesn't start, a "
+        "page shows nothing, or there are console errors or failed requests. Keep it "
+        "working: when you add a part of the app, make `scripts/start.sh` start it too. "
+        "Check it yourself before you finish, e.g. `APP_PORT=8799 sh scripts/start.sh &` "
+        "then `curl -s http://127.0.0.1:8799/`, and stop it afterwards.",
+        "",
+    ],
+    "tester": [
+        "## Pages of the running app",
+        "After the suite passes, ai-factory starts the app (`scripts/start.sh`) and opens `/` "
+        "and every path listed in `tests/app-pages.txt` (one per line, `#` for comments) in "
+        "a headless browser. When this task adds a page or screen a person can open, add "
+        "its path there.",
+        "",
+    ],
+}
 
 
 def test_note_lines(project: Project, setup: bool = False) -> list[str]:
@@ -384,6 +412,14 @@ KIND_NOTES = {
             "code is written later and may be organised differently, and a test that guessed "
             "can never pass. When a criterion is about a calculation, check it through the "
             "program's output unless the design names the function.",
+            "Test a user interface the way a person uses it: with a browser driver "
+            "(Playwright, when the toolchain image has it) against the real running app "
+            "started by `scripts/start.sh` (it serves on `http://127.0.0.1:$APP_PORT`) with "
+            "its real back end, never a component rendered in a simulated DOM with the "
+            "server mocked. Find elements by their role, label or visible text, as the "
+            "documents describe them, never by test ids or CSS classes you made up: the "
+            "screens don't exist yet. `tests/acceptance/run.sh` starts the app (setting "
+            "`APP_PORT`) before those tests and stops it afterwards.",
             "Keep them out of `tests/run.sh`, the suite every task must pass: if it would "
             "run `tests/acceptance/`, change it to leave that directory out. ai-factory checks "
             "this.",
@@ -404,6 +440,9 @@ KIND_NOTES = {
             "how to test it) and an ARCHITECTURE.md (how the project is organised, following "
             "the design). The toolchain image (below) already provides the language and "
             "tools.",
+            "If the project has a server or a user interface, write `scripts/start.sh` "
+            '(see "The running app" below) so the skeleton already starts and shows a page, '
+            "and have README.md's run instructions use it.",
             "",
         ],
         "docs": [
@@ -537,6 +576,8 @@ def build_role_pack(
         ]
     elif role == "tester":
         lines += SERVICES_CONTRACT
+    if task.kind == "setup" or (repo / APP_START).is_file():
+        lines += APP_CONTRACT.get(role, [])
     if role == "tester":
         lines += ["Run the suite with `sh tests/run.sh`.", ""]
     else:
