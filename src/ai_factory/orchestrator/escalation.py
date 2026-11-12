@@ -38,7 +38,7 @@ from ai_factory.db import session
 LEVEL_RETRY, LEVEL_SPLIT, LEVEL_ESCALATED = 0, 1, 2
 MAX_SPLIT_DEPTH = 2
 # The standard tasks: their instructions depend on their kind, which split pieces lose.
-UNSPLITTABLE_KINDS = ("setup", "acceptance", "docs")
+UNSPLITTABLE_KINDS = ("setup", "acceptance", "seed", "docs")
 
 
 @dataclass
