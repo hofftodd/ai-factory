@@ -1046,6 +1046,19 @@ class TaskRunner:
             and not result[0].problem
             and not (result[0].failed + result[0].errors)
         )
+        if task.no_build and not self._acceptance_only(task, project, changed):
+            # A tests-only task (the replanner fixing tests that pinned a detail): the code
+            # is already right, so the fixed tests pass from the start, and no Builder runs.
+            if not green:
+                raise StepFailed(
+                    "this task only fixes tests, and the suite fails: make the tests check "
+                    "the behaviour the documents describe, which the code already has",
+                    "\n".join(self._tail),
+                    kind="validation",
+                )
+            self._emit("system", "tests-only task: no Builder step; it merges as the suite passes")
+            self._update_task(tests_ready=True, tests_commit=gitops.head(clone))
+            return
         if self._acceptance_only(task, project, changed):
             # Acceptance tests run only at the end, against the finished project, so they
             # can't fail first here; the regular suite must still pass, and no Builder runs.

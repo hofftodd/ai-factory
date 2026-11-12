@@ -155,7 +155,11 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      changes tasks, each with a reason. Revisions are recorded and
      `tasks.md` is updated. Growth beyond a cap (default +50% of the
      approved plan) waits for your approval. Document changes are only
-     proposed; once you approve, the Project Planner makes them.
+     proposed; once you approve, the Project Planner makes them. When a
+     failure comes from a test that pinned a detail the documents leave open
+     (an element id, a function name), the replanner adds a *tests-only*
+     task: the Tester fixes the test, no Builder runs, and working code is
+     never reshaped to fit a guess.
    - **Back to planning.** To change course yourself, press *Back to
      planning* on the project (once nothing is running). No new tasks start
      while you talk to the Project Planner and edit the documents. When you
