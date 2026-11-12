@@ -741,4 +741,5 @@ def test_roles_are_listed(client):
         "Environment Agent",
         "Tester Agent",
         "Builder Agent",
+        "Reviewer Agent",
     ]

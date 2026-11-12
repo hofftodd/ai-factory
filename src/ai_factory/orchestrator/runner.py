@@ -21,9 +21,9 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from ai_factory import appcheck, gitops, images, sandbox, testresults
+from ai_factory import appcheck, gitops, images, llm, review, sandbox, testresults
 from ai_factory.config import get_settings
-from ai_factory.core import gates, roles, watchdog
+from ai_factory.core import gates, roles, spend, watchdog
 from ai_factory.core.contextpack import build_pack, build_role_pack
 from ai_factory.core.models import (
     Event,
@@ -815,7 +815,7 @@ class TaskRunner:
             await self._merge_or_gate(project)
             return
         # The Builder's verify step left the task VALIDATING.
-        if await self._coverage_ok(project):
+        if await self._coverage_ok(project) and await self._review(project, clone):
             await self._merge_or_gate(project)
 
     def _set_run(self, **fields: Any) -> None:
@@ -839,13 +839,20 @@ class TaskRunner:
             s.refresh(t)
             return t
 
-    async def _next_run(self, role: str, project: Project, task: Task) -> None:
-        """Hand over to the next agent: a new run, on its own node and gateway token."""
+    async def _next_run(
+        self,
+        role: str,
+        project: Project,
+        task: Task,
+        options: list[tuple[int | None, str]] | None = None,
+    ) -> None:
+        """Hand over to the next agent: a new run, on its own node and gateway token.
+        `options` overrides where it may run (default: the coding agent's choices)."""
         from ai_factory import residency
         from ai_factory.orchestrator.main import choose_node, node_load
 
         finish_run(self.run_id, RunState.SUCCEEDED, "step done")
-        options = executor_choices(project, task, role)
+        options = options or executor_choices(project, task, role)
         node_id, model = options[0]
         # Wait for a free slot on one of the next agent's nodes, and (on ai-swap nodes) until
         # its model can load without swapping out a model other running work is using.
@@ -1291,6 +1298,114 @@ class TaskRunner:
             f"The task's tests pass, but {why}, also after the Tester added more. Approve to "
             "merge it anyway, or reject to send it back to the Tester.",
             task_id=self.task_id,
+        )
+        return False
+
+    async def _review(self, project: Project, clone: Path) -> bool:
+        """The Reviewer Agent checks the change against the requirements and design before
+        it merges (the `review` checkpoint, on by default). Blocking findings send the task
+        back to the Builder; after max_review_rounds rejections the user decides. True
+        when the task may merge now."""
+        task = self._check()
+        options: list[tuple[int | None, str]] = list(roles.choices(project, roles.REVIEWER))
+        if (
+            not gates.enabled(project, "review")
+            or task.kind == "acceptance"
+            or task.no_build
+            or not options
+        ):
+            return True
+        await self._next_run(roles.REVIEWER, project, task, options=options)
+        with session() as s:
+            run = s.get(TaskRun, self.run_id)
+            assert run is not None
+            node = s.get(Node, run.node_id) if run.node_id is not None else None
+            model = run.model
+        if node is None:
+            self._emit("review", "no node for the Reviewer; merging without a review")
+            return True
+        from ai_factory.planner import doc_path
+
+        def read(rel: str) -> str:
+            path = clone / rel
+            return path.read_text(errors="replace") if path.is_file() else ""
+
+        docs_req = read(doc_path(project, "requirements"))
+        docs_design = read(doc_path(project, "design"))
+        code_files = [
+            f
+            for f in gitops.changed_since(clone, gitops.BASE_REF)
+            if not roles.is_test_path(project, f)
+        ]
+        max_lines = int(watchdog.limit(project, "max_file_lines"))
+        system = review.system_prompt(
+            project,
+            task,
+            review.requirements_for(task, docs_req),
+            docs_design,
+            await asyncio.to_thread(gitops.diff, clone),
+            review.big_files(clone, code_files, max_lines),
+            max_lines,
+        )
+        self._emit("review", f"Reviewer ({model or node.name}) is reading the change")
+        try:
+            result = await llm.stream_chat(
+                node,
+                model,
+                system,
+                [{"role": "user", "content": "Review the change now."}],
+                repo=clone,
+                should_abort=lambda: stop_requested(task.project_id, self.task_id, self.started_at),
+            )
+        except llm.Aborted:
+            raise Stopped("stopped during the review") from None
+        except Exception as e:  # noqa: BLE001 - a model error fails the step like any other
+            raise StepFailed(f"the review could not run: {e}", kind="executor") from e
+        self._set_run(
+            model_requests=1, tokens_in=result.input_tokens, tokens_out=result.output_tokens
+        )
+        spend.charge(task.project_id, node, result.input_tokens, result.output_tokens)
+        try:
+            verdict = review.parse_review(result.text)
+        except review.ReviewError as e:
+            self._emit("review", f"the Reviewer's answer was unreadable ({e}); merging anyway")
+            return True
+        for note in verdict.notes:
+            self._emit("review", f"note: {note}", note=note)
+        if verdict.passed:
+            self._emit("review", "Reviewer: no blocking problems", passed=True)
+            return True
+        findings = verdict.findings()
+        self._emit("review", f"Reviewer: blocking problems\n{findings}", passed=False)
+        with session() as s:
+            earlier = len(
+                s.exec(
+                    select(TaskRun).where(
+                        TaskRun.task_id == self.task_id,
+                        TaskRun.step == roles.REVIEWER,
+                        TaskRun.failure_kind == "review",
+                        col(TaskRun.id) != self.run_id,
+                    )
+                ).all()
+            )
+        if earlier + 1 < int(watchdog.limit(project, "max_review_rounds")):
+            raise StepFailed(
+                "the Reviewer found problems to fix before this merges:\n" + findings,
+                findings,
+                kind="review",
+            )
+        why = f"the Reviewer still objects after {earlier + 1} review(s)"
+        self._set_run(failure_kind="review")
+        transition(self.task_id, (TaskState.VALIDATING,), TaskState.AWAITING_MERGE, why)
+        finish_run(self.run_id, RunState.SUCCEEDED, f"{why}:\n{findings}")
+        gates.open_gate(
+            task.project_id,
+            GateKind.REVIEW,
+            f"Task {task.key or self.task_id}: the Reviewer still objects: {task.title}",
+            f"The task's tests pass, but {why}:\n\n{findings}\n\nApprove to merge it anyway, "
+            "or reject to send it back to the Builder (your note goes with it).",
+            task_id=self.task_id,
+            payload={"findings": findings},
         )
         return False
 

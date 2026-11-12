@@ -15,6 +15,7 @@ const ACTIONS: Record<GateKind, { label: string; approve: string; reject: string
   budget: { label: "Budget", approve: "Raise the cap", reject: "Pause project" },
   coverage: { label: "Under-tested", approve: "Merge anyway", reject: "Back to the Tester" },
   already_built: { label: "Already built", approve: "Merge the tests", reject: "Back to the Tester" },
+  review: { label: "Reviewer objects", approve: "Merge anyway", reject: "Back to the Builder" },
 };
 
 function GateCard({ g, onDone }: { g: Gate; onDone: () => void }) {

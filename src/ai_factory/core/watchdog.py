@@ -43,6 +43,9 @@ DEFAULTS: dict[str, Any] = {
     "growth_cap_pct": 50,
     # Acceptance failures handed back to the replanner before asking the user.
     "max_acceptance_failures": 2,
+    # The Reviewer: rejections before asking the user, and the file size it flags.
+    "max_review_rounds": 2,
+    "max_file_lines": 800,
 }
 
 

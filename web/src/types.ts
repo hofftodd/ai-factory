@@ -238,7 +238,8 @@ export type GateKind =
   | "milestone"
   | "budget"
   | "coverage"
-  | "already_built";
+  | "already_built"
+  | "review";
 
 export interface TestCase {
   id: number;

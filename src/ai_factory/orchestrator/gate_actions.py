@@ -5,9 +5,21 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from sqlmodel import col, select
+
 from ai_factory import gitops
-from ai_factory.core import gates, spend
-from ai_factory.core.models import Gate, GateKind, GateState, Project, Task, TaskState, now
+from ai_factory.core import gates, roles, spend
+from ai_factory.core.models import (
+    Gate,
+    GateKind,
+    GateState,
+    Project,
+    RunState,
+    Task,
+    TaskRun,
+    TaskState,
+    now,
+)
 from ai_factory.core.state import emit, transition
 from ai_factory.db import session
 
@@ -32,6 +44,31 @@ def send_back_to_tester(
         task_id, frm, TaskState.QUEUED, "sent back to the Tester" + (f": {note}" if note else "")
     ):
         emit(project_id, task_id, "sent_back", note, source=source)
+
+
+def send_back_to_builder(task_id: int, findings: str, note: str = "") -> None:
+    """The Reviewer's findings stand: the Builder works on the task again (its tests are
+    kept). The reviewer run is marked failed with the findings and the user's note, which
+    the Builder's next briefing shows as why the last attempt failed."""
+    reason = "the Reviewer found problems to fix before this merges:\n" + findings
+    if note:
+        reason += f"\n\nFrom the user: {note}"
+    with session() as s:
+        t = s.get(Task, task_id)
+        if t is None or t.state != TaskState.AWAITING_MERGE:
+            return
+        t.escalation_level, t.level_failures = 0, 0
+        s.add(t)
+        run = s.exec(
+            select(TaskRun)
+            .where(TaskRun.task_id == task_id, TaskRun.step == roles.REVIEWER)
+            .order_by(col(TaskRun.id).desc())
+        ).first()
+        if run is not None:
+            run.state, run.reason = RunState.FAILED, reason
+            s.add(run)
+        s.commit()
+    transition(task_id, (TaskState.AWAITING_MERGE,), TaskState.QUEUED, "back to the Builder")
 
 
 async def handle(gate: Gate) -> None:
@@ -60,7 +97,7 @@ async def handle(gate: Gate) -> None:
                     TaskState.FAILED,
                     f"merge rejected by user{': ' + gate.note if gate.note else ''}",
                 )
-        elif gate.kind == GateKind.COVERAGE and gate.task_id is not None:
+        elif gate.kind in (GateKind.COVERAGE, GateKind.REVIEW) and gate.task_id is not None:
             if approved:  # merge anyway
                 try:
                     async with merge_lock(gate.project_id):
@@ -72,6 +109,10 @@ async def handle(gate: Gate) -> None:
                         TaskState.FAILED,
                         f"merge failed: {e}",
                     )
+            elif gate.kind == GateKind.REVIEW:
+                send_back_to_builder(
+                    gate.task_id, str(gate.payload.get("findings") or ""), gate.note
+                )
             else:
                 send_back_to_tester(gate.task_id, (TaskState.AWAITING_MERGE,), gate.note)
         elif gate.kind == GateKind.ALREADY_BUILT and gate.task_id is not None:

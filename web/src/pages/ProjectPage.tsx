@@ -196,6 +196,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
   const [tester, setTester] = useState(b("tester", "executor"));
   const [builder, setBuilder] = useState(b("builder", "executor"));
   const [envAgent, setEnvAgent] = useState(b("environment"));
+  const [reviewer, setReviewer] = useState(b("reviewer"));
   const [escalation, setEscalation] = useState(b("escalation"));
   const wd = project.watchdog_effective;
   const ge = project.gates_effective ?? {};
@@ -213,6 +214,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     task_merge: ge.task_merge ?? false,
     replan_approval: ge.replan_approval ?? false,
     milestone: ge.milestone ?? true,
+    review: ge.review ?? true,
   });
   const setWd = (k: string, v: unknown) => setW((x) => ({ ...x, [k]: v }));
   const [f, setF] = useState({
@@ -280,6 +282,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
               environment: toBinding(envAgent),
               tester: toBinding(tester),
               builder: toBinding(builder),
+              reviewer: toBinding(reviewer),
               escalation: toBinding(escalation),
             },
           });
@@ -298,6 +301,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <RoleFields label="Environment" binding={envAgent} onChange={setEnvAgent} hint="Empty: uses the Task Planner's model" />
         <RoleFields label="Tester" binding={tester} onChange={setTester} withEffort multi />
         <RoleFields label="Builder" binding={builder} onChange={setBuilder} withEffort multi />
+        <RoleFields label="Reviewer" binding={reviewer} onChange={setReviewer} hint="Empty: uses the Task Planner's model" />
         <RoleFields label="Escalation" binding={escalation} onChange={setEscalation} withEffort />
         <Field label="Coding agent" hint="Runs the Tester and Builder">
           <select value={f.executor_kind} onChange={(e) => set("executor_kind", e.target.value)}>
@@ -391,6 +395,9 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         </Field>
         <Field label="Approve each task's merge">
           <input type="checkbox" checked={g.task_merge} onChange={(e) => setG({ ...g, task_merge: e.target.checked })} />
+        </Field>
+        <Field label="Reviewer checks each task before it merges" hint="Asks you only if it still objects after two rounds">
+          <input type="checkbox" checked={g.review} onChange={(e) => setG({ ...g, review: e.target.checked })} />
         </Field>
         <Field label="Approve before pushing the finished milestone">
           <input type="checkbox" checked={g.milestone} onChange={(e) => setG({ ...g, milestone: e.target.checked })} />

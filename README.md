@@ -2,10 +2,10 @@
 
 A self-hosted dashboard that takes a GitHub project through a spec-driven
 SDLC with AI agents: interactive specification, then autonomous execution of
-small, context-bounded tasks on local (or cloud) models, by five agents with
+small, context-bounded tasks on local (or cloud) models, by six agents with
 strictly separate jobs (a Project Planner, a Task Planner, an Environment
-Agent, a Tester and a Builder), with an orchestrator that enforces their roles, watches for
-runaway agents, replans after each task, and a big red stop button.
+Agent, a Tester, a Builder and a Reviewer), with an orchestrator that
+enforces their roles, watches for runaway agents, replans after each task, and a big red stop button.
 
 Status: **M4 (multi-node & polish) implemented**: all planned milestones are
 done (M1 sandboxed execution + stop controls, M2 specify & decompose, M3
@@ -34,6 +34,7 @@ the agents working through the tasks. More in [Screenshots](#screenshots).*
 | **Environment Agent** | Once the plan is approved, writes the toolchain image (`.ai-factory/Dockerfile`) and a check script proving every tool the project needs is installed; ai-factory builds and checks it before any task runs | Write code, tests or documents |
 | **Tester Agent** | Writes each task's tests before the code exists, the acceptance tests, and the test runner; runs tests | Change anything outside the test folders |
 | **Builder Agent** | Writes the code (plus `README.md` and `ARCHITECTURE.md`) until the tests pass; runs the tests | Change any test or the toolchain image |
+| **Reviewer Agent** | Reads each task's change against the requirements and design before it merges; sends blocking problems back to the Builder | Write code, tests or documents |
 
 The orchestrator (plain code, no model) enforces this: planners can only read
 (the repository, and the web for the Project Planner) and only their allowed
@@ -103,6 +104,12 @@ Each agent can use a different model. See [ARCHITECTURE.md](ARCHITECTURE.md).
      blank page, console or uncaught errors, failed requests, or a page that
      scrolls far sideways send the task back to the Builder with what was
      seen. Screenshots appear on the task's Tests tab.
+   - **Review:** the Reviewer Agent reads the change, the requirements it
+     covers and the design. It blocks only for the design done another way,
+     the goal met only to the letter, code in the wrong place (or a file over
+     800 lines), a clear bug, or a UI a person couldn't use; blocking
+     findings go back to the Builder. After two rounds it asks you. Other
+     notes are listed at the milestone. A checkpoint you can turn off.
    - **Merge** into the milestone branch.
 
    Around that:
