@@ -222,6 +222,9 @@ class TaskRunner:
         self.image = ""  # set once the attempt's toolchain image is ready
         self.acceptance_in_suite = 0  # acceptance test cases the last suite run included
         self.conflicted: list[str] = []  # files merged with conflict markers for the Builder
+        # The milestone branch conflicted while the Tester was still to run: merged (with
+        # the markers) after the Tester, for the Builder.
+        self.deferred_sync = False
         self.settings = get_settings()
         self.run_dir = self.settings.runs_dir / str(run_id)
         with session() as s:
@@ -491,34 +494,57 @@ class TaskRunner:
                 gitops.sync_task_clone, task.project_id, self.task_id, project.milestone_branch
             )
         except gitops.MergeConflict as e:
-            if not self._builder_can_resolve(task, project, e.files):
-                raise StepFailed(
-                    f"the task's work conflicts with {project.milestone_branch} "
-                    f"in {', '.join(e.files) or 'some files'}",
-                    kind="conflict",
-                ) from e
-            self.conflicted = await asyncio.to_thread(
-                gitops.merge_keeping_conflicts,
-                task.project_id,
-                self.task_id,
-                project.milestone_branch,
-            )
-            self._emit(
-                "system",
-                f"brought in the latest {project.milestone_branch}; it conflicts in "
-                f"{', '.join(self.conflicted)}, which the Builder resolves",
-                files=self.conflicted,
-            )
+            if not task.tests_ready and self._builder_can_resolve(
+                task, project, e.files, after_tester=True
+            ):
+                # The Tester goes first (sent back for more tests): it works from the
+                # task's own state, and the Builder gets the merge with the conflicts.
+                self.deferred_sync = True
+                self._emit(
+                    "system",
+                    f"the latest {project.milestone_branch} conflicts with this task in "
+                    f"{', '.join(e.files)}; it comes in after the Tester, for the Builder "
+                    "to resolve",
+                    files=e.files,
+                )
+                return
+            await self._merge_with_conflicts(task, project, e)
             merged = True
         if merged:
             self._emit("system", f"brought in the latest {project.milestone_branch}")
             if task.tests_ready:  # the Builder's diff starts after the merge
                 self._update_task(tests_commit=gitops.head(clone))
 
-    def _builder_can_resolve(self, task: Task, project: Project, files: list[str]) -> bool:
+    async def _merge_with_conflicts(
+        self, task: Task, project: Project, e: gitops.MergeConflict
+    ) -> None:
+        """Merge the milestone branch with its conflict markers committed, for the Builder
+        to resolve; or fail the step when the Builder may not resolve them."""
+        if not self._builder_can_resolve(task, project, e.files):
+            raise StepFailed(
+                f"the task's work conflicts with {project.milestone_branch} "
+                f"in {', '.join(e.files) or 'some files'}",
+                kind="conflict",
+            ) from e
+        self.conflicted = await asyncio.to_thread(
+            gitops.merge_keeping_conflicts, task.project_id, self.task_id, project.milestone_branch
+        )
+        self._emit(
+            "system",
+            f"brought in the latest {project.milestone_branch}; it conflicts in "
+            f"{', '.join(self.conflicted)}, which the Builder resolves",
+            files=self.conflicted,
+        )
+
+    def _builder_can_resolve(
+        self, task: Task, project: Project, files: list[str], after_tester: bool = False
+    ) -> bool:
         """Whether a merge conflict in `files` can go to the task's Builder: its tests are
-        written, a Builder step follows, and every file is one the Builder may edit."""
-        if not task.tests_ready or task.no_build or task.kind in ("acceptance", "setup"):
+        written (or, `after_tester`, the Tester writes them first), a Builder step follows,
+        and every file is one the Builder may edit."""
+        if not (task.tests_ready or after_tester):
+            return False
+        if task.no_build or task.kind in ("acceptance", "setup"):
             return False
         try:
             if not uses_pipeline(task, get_executor(resolve_executor(project, task)[0])):
@@ -529,6 +555,21 @@ class TaskRunner:
             roles.is_test_path(project, f) or roles.is_env_path(f) or roles.is_test_config(f)
             for f in files
         )
+
+    async def _merge_for_builder(self, task: Task, project: Project, clone: Path) -> None:
+        """Bring in the milestone branch that conflicted before the Tester ran, keeping the
+        conflict markers for the Builder; its diff starts after the merge."""
+        self.deferred_sync = False
+        task = self._check()
+        try:
+            merged = await asyncio.to_thread(
+                gitops.sync_task_clone, task.project_id, self.task_id, project.milestone_branch
+            )
+        except gitops.MergeConflict as e:
+            await self._merge_with_conflicts(task, project, e)
+            merged = True
+        if merged:
+            self._update_task(tests_commit=gitops.head(clone))
 
     def _conflict_brief(self) -> str:
         return (
@@ -762,6 +803,8 @@ class TaskRunner:
             if role == roles.TESTER:
                 await self._tester(project, clone, executor)
             else:
+                if self.deferred_sync:
+                    await self._merge_for_builder(task, project, clone)
                 await self._builder(project, clone, executor)
             task = self._check()
             if task.no_build:
