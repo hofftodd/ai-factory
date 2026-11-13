@@ -4,7 +4,8 @@ The Tester sets up ``tests/run.sh`` to run the whole suite and write, into
 ``$AI_FACTORY_RESULTS``:
 
 - ``junit.xml``: JUnit XML (pytest ``--junitxml``, jest-junit, gotestsum, ...);
-- ``coverage.xml`` (Cobertura) or ``lcov.info``: line coverage.
+- line coverage: ``coverage*.xml`` (Cobertura or JaCoCo) and/or ``lcov*.info``; a
+  project with several modules can write one file per module, and they are merged.
 
 These are the formats nearly every language's tools can produce, so ai-factory
 needs nothing language-specific. This module parses them, works out which
@@ -126,6 +127,70 @@ def parse_cobertura(text: str, root: str = "") -> dict[str, dict[int, int]]:
     return out
 
 
+def _source_files(root: str) -> list[str]:
+    """The repository's files, relative to `root` (for resolving JaCoCo's package paths)."""
+    if not root:
+        return []
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout
+        return [f for f in out.splitlines() if f]
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def parse_jacoco(text: str, root: str = "") -> dict[str, dict[int, int]]:
+    """JaCoCo's XML report (Gradle's and Maven's JVM coverage). It names files by package
+    and source file name (`com/app/Units.kt`), not by path: each is resolved to the
+    repository file whose path ends with that, preferring one outside the test sources."""
+    tree = ET.fromstring(text)
+    files = _source_files(root)
+    out: dict[str, dict[int, int]] = {}
+    for pkg in tree.iter("package"):
+        name = pkg.get("name", "").strip("/")
+        for src in pkg.iter("sourcefile"):
+            tail = f"{name}/{src.get('name', '')}" if name else src.get("name", "")
+            matches = [f for f in files if f == tail or f.endswith("/" + tail)]
+            main = [f for f in matches if "/src/test/" not in f and not f.startswith("src/test/")]
+            rel = (main or matches or [tail])[0]
+            lines = out.setdefault(rel, {})
+            for line in src.iter("line"):
+                try:
+                    num = int(line.get("nr", "0"))
+                    hits = int(line.get("ci", "0"))
+                    missed = int(line.get("mi", "0"))
+                except ValueError:
+                    continue
+                if hits or missed:
+                    lines[num] = max(lines.get(num, 0), hits)
+    return out
+
+
+def parse_coverage_xml(text: str, root: str = "") -> dict[str, dict[int, int]]:
+    """A Cobertura or a JaCoCo report, told apart by the root element."""
+    tag = ET.fromstring(text).tag
+    if tag == "report":
+        return parse_jacoco(text, root)
+    return parse_cobertura(text, root)
+
+
+def merge_lines(*reports: dict[str, dict[int, int]]) -> dict[str, dict[int, int]]:
+    """Several coverage reports as one: a line's hits are the most any report counted."""
+    out: dict[str, dict[int, int]] = {}
+    for report in reports:
+        for f, lines in report.items():
+            merged = out.setdefault(f, {})
+            for num, hits in lines.items():
+                merged[num] = max(merged.get(num, -1), hits)
+    return out
+
+
 def parse_lcov(text: str, root: str = "") -> dict[str, dict[int, int]]:
     out: dict[str, dict[int, int]] = {}
     current: dict[int, int] | None = None
@@ -202,14 +267,33 @@ def collect(results_dir: Path, workspace: Path) -> Results:
         res.problem = f"junit.xml is not valid XML: {e}"
         return res
     root = str(workspace)
-    try:
-        if (results_dir / "coverage.xml").is_file():
-            res.lines = parse_cobertura((results_dir / "coverage.xml").read_text(), root)
-        elif (results_dir / "lcov.info").is_file():
-            res.lines = parse_lcov((results_dir / "lcov.info").read_text(), root)
-    except ET.ParseError as e:
-        res.problem = f"coverage.xml is not valid XML: {e}"
+    reports = []
+    for path in sorted(results_dir.glob("coverage*.xml")):
+        try:
+            reports.append(parse_coverage_xml(path.read_text(errors="replace"), root))
+        except ET.ParseError as e:
+            res.problem = f"{path.name} is not valid XML: {e}"
+    for path in sorted(results_dir.glob("lcov*.info")):
+        reports.append(parse_lcov(path.read_text(errors="replace"), root))
+    res.lines = _in_repository(merge_lines(*reports), _source_files(root))
     return res
+
+
+def _in_repository(lines: dict[str, dict[int, int]], files: list[str]) -> dict[str, dict[int, int]]:
+    """Coverage keyed by repository path. A module's tool may name files relative to the
+    module (`src/app/x.ts` for `frontend/src/app/x.ts`): a path that isn't a repository
+    file becomes the one repository file ending with it, when there is exactly one."""
+    if not files:
+        return lines
+    known = set(files)
+    out: dict[str, dict[int, int]] = {}
+    for f, hits in lines.items():
+        if f not in known:
+            matches = [k for k in files if k.endswith("/" + f)]
+            if len(matches) == 1:
+                f = matches[0]
+        out = merge_lines(out, {f: hits})
+    return out
 
 
 # -- tasks and changes -------------------------------------------------------------

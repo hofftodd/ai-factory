@@ -311,7 +311,9 @@ RESULTS_CONTRACT = [
     "(`tests/acceptance/`, which run through their own `tests/acceptance/run.sh`). It must "
     "exit non-zero when any test fails and write, into the directory `$AI_FACTORY_RESULTS`:",
     "- `junit.xml`: the results in JUnit XML (e.g. pytest `--junitxml`, jest-junit, gotestsum);",
-    "- `coverage.xml` (Cobertura) or `lcov.info`: line coverage of the project's code;",
+    "- line coverage of the project's code: `coverage.xml` (Cobertura or JaCoCo XML) or "
+    "`lcov.info`. With several modules, write one per module (e.g. `coverage-backend.xml` "
+    "from JaCoCo, `lcov-frontend.info`): every `coverage*.xml` and `lcov*.info` counts;",
     "- an HTML report of the results under `report/`, when the toolchain image has an "
     "HTML reporter: one page or folder per suite, self-contained where the reporter can "
     "be. For example pytest-html: `--html=$AI_FACTORY_RESULTS/report/backend.html "

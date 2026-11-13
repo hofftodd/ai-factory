@@ -64,6 +64,68 @@ def test_collect_reports_missing_results(tmp_path):
     assert res.per_file()["src/greet.py"] == {"covered": 1, "total": 2}
 
 
+JACOCO = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><!DOCTYPE report PUBLIC \
+"-//JACOCO//DTD Report 1.1//EN" "report.dtd"><report name="backend">
+<package name="com/app"><class name="com/app/Units" sourcefilename="Units.kt"/>
+  <sourcefile name="Units.kt">
+    <line nr="3" mi="0" ci="4" mb="0" cb="0"/><line nr="4" mi="2" ci="0" mb="0" cb="0"/>
+  </sourcefile>
+  <sourcefile name="Gone.kt"><line nr="1" mi="0" ci="1"/></sourcefile>
+</package></report>"""
+
+
+def _repo(tmp_path, *files):
+    for f in files:
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f).write_text("x\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+
+def test_parse_jacoco_finds_each_source_file_in_the_repository(tmp_path):
+    _repo(
+        tmp_path,
+        "backend/src/main/kotlin/com/app/Units.kt",
+        "backend/src/test/kotlin/com/app/Units.kt",
+    )
+    lines = tr.parse_jacoco(JACOCO, str(tmp_path))
+    assert lines == {
+        "backend/src/main/kotlin/com/app/Units.kt": {3: 4, 4: 0},
+        "com/app/Gone.kt": {1: 1},  # not in the repository: left as JaCoCo names it
+    }
+    assert tr.parse_coverage_xml(JACOCO, str(tmp_path)) == lines
+    assert tr.parse_coverage_xml(COBERTURA) == tr.parse_cobertura(COBERTURA)
+
+
+def test_collect_merges_every_coverage_file(tmp_path):
+    """A back end's JaCoCo report and a front end's Cobertura and lcov reports count
+    together; a line two reports share counts its most hits."""
+    _repo(tmp_path, "backend/src/main/kotlin/com/app/Units.kt", "src/greet.py")
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "junit.xml").write_text(JUNIT)
+    (results / "coverage-backend.xml").write_text(JACOCO)
+    (results / "coverage.xml").write_text(COBERTURA)
+    (results / "lcov-frontend.info").write_text(LCOV)
+    res = tr.collect(results, tmp_path)
+    assert res.problem == ""
+    assert res.lines["backend/src/main/kotlin/com/app/Units.kt"] == {3: 4, 4: 0}
+    assert res.lines["src/greet.py"] == {1: 1, 2: 0, 3: 4}  # Cobertura and lcov merged
+    assert res.lines["src/cli.py"] == {5: 2}
+    # A module's tool may name files relative to the module.
+    _repo(tmp_path, "frontend/src/app/app.ts")
+    (results / "lcov-frontend.info").write_text("SF:src/app/app.ts\nDA:1,1\nend_of_record\n")
+    (results / "coverage-frontend.xml").write_text(
+        '<coverage><packages><package><classes><class filename="frontend/src/app/app.ts">'
+        '<lines><line number="1" hits="0"/><line number="2" hits="0"/></lines>'
+        "</class></classes></package></packages></coverage>"
+    )
+    res = tr.collect(results, tmp_path)
+    assert res.lines["frontend/src/app/app.ts"] == {1: 1, 2: 0}
+    assert "src/app/app.ts" not in res.lines
+    (results / "coverage-broken.xml").write_text("<report")
+    assert "coverage-broken.xml is not valid XML" in tr.collect(results, tmp_path).problem
+
+
 def test_task_cases_are_found_by_file_or_class():
     a = tr.Case(name="test_ok", classname="tests.test_greet", file="tests/test_greet.py")
     b = tr.Case(name="test_x", classname="tests.test_greet")
