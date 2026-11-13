@@ -323,6 +323,12 @@ RESULTS_CONTRACT = [
     "name the reporter by its file, `<npm root -g>/@vitest/ui/dist/reporter.js`, since "
     "`html` won't resolve. The user opens the report from the task when tests fail. Check "
     "the reporter is installed first, so a missing one never fails the run.",
+    "Each run starts from a fresh checkout, without the app's installed dependencies "
+    "(`node_modules`, a virtualenv): the toolchain image can't hold them, since it is built "
+    "without the project's code. So `tests/run.sh` installs them from the lockfile when "
+    "they're missing, before running a module's tests (e.g. `[ -d frontend/node_modules ] "
+    "|| (cd frontend && npm ci --prefer-offline --no-audit)`), and so does "
+    "`scripts/start.sh`.",
     "There is no internet access: use only what the toolchain image provides.",
     "",
 ]
