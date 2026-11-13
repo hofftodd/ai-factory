@@ -539,13 +539,14 @@ def build_role_pack(
         + ", ".join(f"`{pat}`" for pat in roles.TEST_FILE_PATTERNS)
         + ")"
     )
+    test_config = ", ".join(f"`{pat}`" for pat in roles.TEST_CONFIG_FILES)
     lines = [f"# Task {task.key or task.id}: {task.title}", ""]
     if role == "tester":
         lines += [
             "You are the Tester Agent. Write the tests for this task: they define when it is "
             "done, and should fail until the Builder Agent implements it. Then run them.",
-            f"You may only create or change files under {test_dirs}. Everything else is "
-            "read-only: changes there are rejected.",
+            f"You may only create or change files under {test_dirs}, and test "
+            f"configuration files ({test_config}). Changes to anything else are rejected.",
             "The whole suite must be able to pass once this task is built. If an existing "
             "test checks that something this task implements is missing or unimplemented, "
             "or pins behaviour this task changes, update or remove that test.",
@@ -557,8 +558,10 @@ def build_role_pack(
             if task.kind == "setup"
             else (
                 " Do not change the test configuration either (`conftest.py`, `pytest.ini`, the "
-                "pytest or coverage sections of `pyproject.toml`, jest or vitest config and the "
-                "like): such changes are rejected."
+                "pytest or coverage sections of `pyproject.toml`, jest, vitest or karma config "
+                "and the like): such changes are rejected. They belong to the Tester: if the "
+                "tests can't run without such a change, say so in "
+                "`$AI_FACTORY_RESULTS/tests-conflict.md`."
             )
         )
         lines += [
