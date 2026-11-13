@@ -32,6 +32,7 @@ def template(client):
             "task_planner": {"node_id": node["id"], "model": "planner"},
         },
         "max_parallel_tasks": 2,
+        "watchdog": {"max_requests": 120},
     }
     r = client.post("/api/projects", json=body)
     assert r.status_code == 201, r.text
@@ -72,6 +73,7 @@ def test_a_rehearsal_project_uses_the_template_models(client, template):
     assert p["role_bindings"]["tester"]["model"] == "coder"
     assert p["role_bindings"]["tester"]["reasoning_effort"] == "high"
     assert p["gates"] == {"plan_approval": True, "milestone": True, "review": True}
+    assert p["watchdog"]["max_requests"] == 120  # larder ran on the default limits
 
 
 def test_a_step_approves_the_documents_and_reports_waiting_checkpoints(client, template):

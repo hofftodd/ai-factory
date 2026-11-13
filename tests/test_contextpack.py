@@ -236,3 +236,13 @@ def test_testers_write_unit_tests_in_the_modules_framework(tmp_path):
     setup = Task(project_id=1, key="SETUP", title="Project setup", kind="setup", req_refs=[])
     pack = build_role_pack(project, setup, repo, "tester", docs={}, test_paths=["tests"])
     assert "one first unit test in each module's own test framework" in pack.text
+
+
+def test_briefs_name_test_files_that_live_with_the_code(tmp_path):
+    # larder: told "only under tests/", the Tester copied Kotlin tests into src/test/.
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T3", title="Units", req_refs=[])
+    for role in ("tester", "builder"):
+        pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
+        assert "a module's `src/test/`" in pack.text and "`*Test.kt`" in pack.text
