@@ -257,7 +257,13 @@ def is_env_path(rel: str) -> bool:
 def fence(project: Project, role: str, changed: list[str]) -> list[str]:
     """Files this role changed that it may not touch (empty = within its capabilities)."""
     if role == TESTER:
-        return [f for f in changed if not is_test_path(project, f) or is_env_path(f)]
+        # Whole-file test configuration (karma.conf.js, jest.config.ts...) is the Tester's
+        # too: the Builder may not change it after setup, so nobody else could.
+        return [
+            f
+            for f in changed
+            if not (is_test_path(project, f) or is_test_config_file(f)) or is_env_path(f)
+        ]
     if role == BUILDER:
         return [f for f in changed if is_test_path(project, f) or is_env_path(f)]
     return []
@@ -288,6 +294,12 @@ TEST_CONFIG_SECTIONS = {
 def is_test_config(rel: str) -> bool:
     name = rel.rsplit("/", 1)[-1]
     return name in TEST_CONFIG_SECTIONS or any(fnmatch.fnmatch(name, p) for p in TEST_CONFIG_FILES)
+
+
+def is_test_config_file(rel: str) -> bool:
+    """A file that only configures tests (not a shared one such as package.json)."""
+    name = rel.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatch(name, p) for p in TEST_CONFIG_FILES)
 
 
 def test_config_changed(rel: str, before: str | None, after: str | None) -> bool:

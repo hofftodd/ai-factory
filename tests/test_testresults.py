@@ -176,6 +176,11 @@ def test_test_paths_and_fences():
     changed = ["src/app.py", "tests/test_a.py"]
     assert roles.fence(p, roles.TESTER, changed) == ["src/app.py"]
     assert roles.fence(p, roles.BUILDER, changed) == ["tests/test_a.py"]
+    # larder: karma.conf.js is outside tests/, and the Builder may not change it after
+    # setup, so it is the Tester's; shared files like package.json are not.
+    config = ["frontend/karma.conf.js", "frontend/package.json", "frontend/src/app/a.spec.ts"]
+    assert roles.fence(p, roles.TESTER, config) == ["frontend/package.json"]
+    assert roles.fence(p, roles.TESTER, [".ai-factory/Dockerfile"]) == [".ai-factory/Dockerfile"]
 
 
 def test_test_configuration_changes():

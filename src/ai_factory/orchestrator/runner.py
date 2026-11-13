@@ -977,7 +977,9 @@ class TaskRunner:
         self._emit("system", f"{who} starting" + (f" on {node.name} / {model}" if node else ""))
         mounts: dict[str, Any] = {"results_dir": self._results_dir(f"{role}-agent")}
         if role == roles.TESTER:
-            mounts |= {"workspace_readonly": True, "writable_dirs": test_paths}
+            # Tests also live next to the code (src/test/, *.spec.ts) and test config files
+            # anywhere: the workspace is writable and the fence below rejects the rest.
+            mounts |= {"readonly_dirs": [roles.ENV_DIR]}
         else:
             mounts |= {"readonly_dirs": [*test_paths, roles.ENV_DIR]}
         code = await self._step(
