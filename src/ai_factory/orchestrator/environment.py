@@ -80,7 +80,10 @@ def system_prompt(
         f"- `{images.DOCKERFILE}`: FROM ai-factory/executor-base. Install the language runtime "
         "(the version the documents name), the test framework, the coverage tool, and every "
         "build tool and library the documents and tasks call for. Install packages so the "
-        "`agent` user can use them without activating anything. Don't add project code.",
+        "`agent` user can use them without activating anything. Don't add project code. "
+        "Use the build tool the design names (Gradle when it says Gradle, not Maven), and "
+        "fetch what it needs ahead of time (its distribution and the libraries the design "
+        "names) so builds work offline.",
         f"- `{CHECK_SCRIPT}`: a POSIX sh script, one command per tool, proving each one is "
         "installed and works (e.g. printing its version). It must exit non-zero if anything "
         "is missing. It runs inside the image as the `agent` user, with no network.",

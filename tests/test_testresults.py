@@ -73,6 +73,17 @@ def test_task_cases_are_found_by_file_or_class():
     assert not tr.is_task_case(c, files)
 
 
+def test_task_cases_from_tap_scripts_and_junit_classes():
+    # larder's T3: tap2junit named the cases after the script and test number, no file.
+    tap = [tr.Case(name=f"case {i}", classname=f"units.{i}") for i in (1, 2)]
+    assert all(tr.is_task_case(c, ["tests/smoke/units.sh"]) for c in tap)
+    assert not tr.is_task_case(tap[0], ["tests/smoke/pantry.sh"])
+    assert not tr.is_task_case(tr.Case(name="x", classname="units.extra"), ["tests/smoke/units.sh"])
+    junit = tr.Case(name="converts kg to g", classname="com.larder.app.UnitsTest")
+    kt = "backend/src/test/kotlin/com/larder/app/UnitsTest.kt"
+    assert tr.is_task_case(junit, [kt])
+
+
 # Vitest's JUnit report, as future-lab's T17 produced it: the class name is the file's
 # path, and a file that fails to load is one failed case named after the file.
 VITEST_JUNIT = """<?xml version="1.0" encoding="UTF-8" ?>
@@ -157,6 +168,11 @@ def test_test_paths_and_fences():
     assert roles.is_test_path(p, "tests/test_a.py") and roles.is_test_path(p, "spec/x_spec.rb")
     assert roles.is_test_path(p, "src/foo_test.go")  # test files next to code count too
     assert not roles.is_test_path(p, "src/app.py")
+    # Kotlin and Maven/Gradle test sources, fixtures included, outside tests/.
+    assert roles.is_test_path(p, "backend/src/test/kotlin/com/app/UnitsTest.kt")
+    assert roles.is_test_path(p, "backend/src/test/resources/application-test.properties")
+    assert roles.is_test_path(p, "src/test/java/AppIT.java")
+    assert not roles.is_test_path(p, "backend/src/main/kotlin/com/app/Units.kt")
     changed = ["src/app.py", "tests/test_a.py"]
     assert roles.fence(p, roles.TESTER, changed) == ["src/app.py"]
     assert roles.fence(p, roles.BUILDER, changed) == ["tests/test_a.py"]

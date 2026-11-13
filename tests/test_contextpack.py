@@ -213,3 +213,26 @@ def test_packs_say_the_services_already_run(tmp_path):
         pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
         assert "has already started the services" in pack.text
         assert "## Services the tests need" not in pack.text
+
+
+def test_packs_say_no_internet_only_when_the_network_is_isolated(tmp_path):
+    repo = _repo(tmp_path)
+    task = Task(project_id=1, key="T1", title="Add", req_refs=[])
+    for network, said in (("isolated", True), ("open", False)):
+        project = Project(name="p", repo_url="x", network=network)
+        pack = build_role_pack(project, task, repo, "builder", docs={}, test_paths=["tests"])
+        assert ("There is no internet access" in pack.text) is said
+
+
+def test_testers_write_unit_tests_in_the_modules_framework(tmp_path):
+    # larder: the Tester checked Kotlin code with grep in shell scripts.
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    feature = Task(project_id=1, key="T3", title="Units", req_refs=[])
+    pack = build_role_pack(project, feature, repo, "tester", docs={}, test_paths=["tests"])
+    assert "## Unit tests" in pack.text and "a `grep` of the code isn't a test" in pack.text
+    builder = build_role_pack(project, feature, repo, "builder", docs={}, test_paths=["tests"])
+    assert "## Unit tests" not in builder.text
+    setup = Task(project_id=1, key="SETUP", title="Project setup", kind="setup", req_refs=[])
+    pack = build_role_pack(project, setup, repo, "tester", docs={}, test_paths=["tests"])
+    assert "one first unit test in each module's own test framework" in pack.text

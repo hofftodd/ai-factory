@@ -220,7 +220,9 @@ def is_task_case(case: Case, test_files: list[str]) -> bool:
 
     Python runners name a case's class with dots (`tests.test_greet.TestX`); JS runners
     such as Vitest and Jest use the file's path (`tests/frontend/registry.test.ts`),
-    also for a file that failed to load."""
+    also for a file that failed to load; JUnit uses the class (`com.app.UnitsTest`), and
+    TAP converters often name cases after the script and test number (`units.1` for
+    `tests/smoke/units.sh`)."""
     for f in test_files:
         if case.file and _rel(case.file) == f:
             return True
@@ -231,6 +233,8 @@ def is_task_case(case: Case, test_files: list[str]) -> bool:
         name = PurePosixPath(f).stem
         cls = case.classname
         if cls and (cls == dotted or cls.startswith(dotted + ".") or cls.endswith(name)):
+            return True
+        if cls and not case.file and cls.startswith(name + ".") and cls[len(name) + 1 :].isdigit():
             return True
         if not cls and not case.file and name in case.name:
             return True

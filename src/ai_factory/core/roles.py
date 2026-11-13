@@ -226,12 +226,25 @@ TEST_FILE_PATTERNS = (
     "*.spec.js",
     "*_spec.rb",
     "*Test.java",
+    "*Tests.java",
+    "*IT.java",
+    "*Test.kt",
+    "*Tests.kt",
+    "*IT.kt",
+    "*Spec.kt",
+    "*Test.scala",
+    "*Spec.scala",
 )
+
+# Maven and Gradle keep every test source and fixture under src/test/ of a module.
+JVM_TEST_DIR = "src/test"
 
 
 def is_test_path(project: Project, rel: str) -> bool:
     dirs = [d.strip("/") for d in (project.test_paths or ["tests"]) if d.strip("/")]
     if any(rel == d or rel.startswith(d + "/") for d in dirs):
+        return True
+    if rel.startswith(JVM_TEST_DIR + "/") or f"/{JVM_TEST_DIR}/" in rel:
         return True
     name = rel.rsplit("/", 1)[-1]
     return any(fnmatch.fnmatch(name, p) for p in TEST_FILE_PATTERNS)
