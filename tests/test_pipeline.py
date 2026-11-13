@@ -167,14 +167,26 @@ async def test_builder_may_not_change_tests(client, origin):
 
 
 async def test_builder_may_not_change_the_test_configuration(client, origin):
+    """The test configuration is the Tester's: a Builder that changes it hands the task
+    to the Tester with what it wanted, instead of retrying a change it can never make."""
     p = make_project(client, origin)
     skip = BUILDER + "echo \"collect_ignore = ['tests']\" > conftest.py\n"
-    t = add_task(client, p["id"], scripts(builder=skip))
-    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    t = add_task(client, p["id"], scripts(tester=MORE_TESTS, builder=skip))
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    runs = runs_of(t["id"])
+    assert [r.step for r in runs[:4]] == ["tester", "builder", "tester", "builder"]
+    assert runs[1].failure_kind == "tests_conflict"
+    brief = pack_of(runs[2])
+    assert "changing the test configuration, which is yours: conftest.py" in brief
+    assert "collect_ignore = ['tests']" in brief
+    assert not (gitops.task_dir(p["id"], t["id"]) / "conftest.py").exists()
+    # A second time in a row fails the attempt instead of another round.
     row = task(t["id"])
-    assert row.state == TaskState.FAILED and "may not touch: conftest.py" in row.reason
-    [denied] = events(t["id"], "denied")
-    assert denied.message == "Builder Agent may not change the test configuration"
+    assert row.state == TaskState.FAILED
+    assert "needs a test configuration change" in row.reason
+    assert events(t["id"], "denied")[0].message == (
+        "Builder Agent may not change the test configuration"
+    )
 
 
 async def test_setup_may_write_the_test_configuration(client, origin):
