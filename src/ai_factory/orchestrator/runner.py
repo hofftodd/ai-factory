@@ -1007,6 +1007,17 @@ class TaskRunner:
                     f, gitops.file_at(clone, start, f), gitops.file_at(clone, "HEAD", f)
                 )
             ]
+        if outside and role == roles.BUILDER and all(roles.is_test_config(f) for f in outside):
+            # Only test configuration, which is the Tester's: retrying the Builder gets
+            # nowhere (it can't make the change), so the Tester gets what it wanted.
+            wanted = self._config_wanted(clone, start, outside)
+            await asyncio.to_thread(gitops.reset_to, clone, start)
+            roles.denied(
+                task.project_id, self.task_id, role, "change the test configuration", files=outside
+            )
+            self._tests_conflict(
+                wanted, (TaskState.RUNNING,), what="needs a test configuration change"
+            )
         if outside:
             await asyncio.to_thread(gitops.reset_to, clone, start)
             if any(roles.is_env_path(f) for f in outside):
@@ -1435,10 +1446,34 @@ class TaskRunner:
             return prev.reason
         return ""
 
-    def _tests_conflict(self, report: str, frm: tuple[TaskState, ...]) -> None:
-        """The Builder reports tests that contradict each other: the task goes back to the
-        Tester with the report. A second report in a row fails the attempt instead, so the
-        two agents can't hand it back and forth."""
+    def _config_wanted(self, clone: Path, start: str, files: list[str]) -> str:
+        """For the Tester: the test configuration the Builder tried to change, and how."""
+        parts = [
+            "The Builder Agent could not finish without changing the test configuration, "
+            "which is yours: " + ", ".join(files) + ". Its changes were not kept. Make the "
+            "change yourself if the task needs it (or explain in the tests why it doesn't), "
+            "so the Builder can work against it. What it wrote:"
+        ]
+        for f in files:
+            after = gitops.file_at(clone, "HEAD", f)
+            before = gitops.file_at(clone, start, f)
+            if after is None:
+                parts.append(f"\n{f}: deleted")
+                continue
+            label = "new file" if before is None else "changed to"
+            parts.append(f"\n{f} ({label}):\n```\n{after[:1500]}\n```")
+        return "\n".join(parts)
+
+    def _tests_conflict(
+        self,
+        report: str,
+        frm: tuple[TaskState, ...],
+        what: str = "says the tests contradict each other",
+    ) -> None:
+        """The Builder reports tests that contradict each other, or needs a change to the
+        test configuration: the task goes back to the Tester with the report. A second
+        report in a row fails the attempt instead, so the two agents can't hand it back and
+        forth."""
         with session() as s:
             backs = s.exec(
                 select(Event)
@@ -1446,12 +1481,9 @@ class TaskRunner:
                 .order_by(col(Event.id).desc())
             ).all()
         if backs and backs[0].data.get("source") == roles.BUILDER:
-            raise StepFailed(
-                f"the Builder Agent says the tests contradict each other: {report[:500]}",
-                kind="tests_conflict",
-            )
+            raise StepFailed(f"the Builder Agent {what}: {report[:500]}", kind="tests_conflict")
         self._set_run(failure_kind="tests_conflict")
-        why = "tests contradict each other; back to the Tester"
+        why = f"the Builder Agent {what}; back to the Tester"
         finish_run(self.run_id, RunState.SUCCEEDED, why)
         send_back_to_tester(self.task_id, frm, report[:4000], source=roles.BUILDER)
         raise Stopped("sent back to the Tester")
