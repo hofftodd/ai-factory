@@ -192,7 +192,9 @@ BASE_IMAGE = (
     "and the coding agent, and "
     "no language runtimes (no Node, no Python): the Dockerfile must install what the project "
     "needs. The base image ends with `USER agent`, so switch to `USER root` for apt-get and "
-    "back to `USER agent` at the end."
+    "back to `USER agent` at the end. It has tar and gzip but not xz or unzip: install "
+    "xz-utils or unzip before unpacking such archives, or prefer the distribution's or the "
+    "vendor's apt packages (e.g. Node from NodeSource)."
 )
 
 PLAIN_LANGUAGE = (
