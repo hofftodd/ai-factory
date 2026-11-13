@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ai_factory.core import roles
 from ai_factory.core.models import Project, Task
 
 CHARS_PER_TOKEN = 4
@@ -532,6 +533,12 @@ def build_role_pack(
     `failing_acceptance` lists the acceptance tests a repair task was added to fix."""
     files = repo_files(repo) if (repo / ".git").exists() else []
     test_dirs = ", ".join(f"`{d}/`" for d in test_paths)
+    # Tests that live with the code count too (roles.is_test_path).
+    test_dirs += (
+        f", a module's `{roles.JVM_TEST_DIR}/` and test files next to the code ("
+        + ", ".join(f"`{pat}`" for pat in roles.TEST_FILE_PATTERNS)
+        + ")"
+    )
     lines = [f"# Task {task.key or task.id}: {task.title}", ""]
     if role == "tester":
         lines += [

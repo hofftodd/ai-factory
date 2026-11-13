@@ -78,6 +78,7 @@ def create_project(client: httpx.Client, like: int, repo_url: str, name: str) ->
         "role_bindings": bindings,
         "max_parallel_tasks": model.get("max_parallel_tasks", 1),
         "min_task_coverage": model.get("min_task_coverage", 80),
+        "watchdog": model.get("watchdog") or {},
         # The run should need you only where a person must decide.
         "gates": {"plan_approval": True, "milestone": True, "review": True},
     }
