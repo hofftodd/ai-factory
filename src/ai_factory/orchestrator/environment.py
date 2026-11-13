@@ -88,7 +88,11 @@ def system_prompt(
         "`agent` user can use them without activating anything. Don't add project code. "
         "Use the build tool the design names (Gradle when it says Gradle, not Maven), and "
         "fetch what it needs ahead of time (its distribution and the libraries the design "
-        "names) so builds work offline.",
+        "names) so builds work offline. Install only the test framework the design names "
+        "for each module (e.g. Karma and Jasmine for Angular, not Jest as well). The app's own "
+        "dependencies belong in the project's manifest; when you pre-fetch them, don't "
+        "install dozens of packages at `@latest` in one command: that tends to fail on "
+        "peer-dependency conflicts.",
         f"- `{CHECK_SCRIPT}`: a POSIX sh script, one command per tool, proving each one is "
         "installed and works (e.g. printing its version). It must exit non-zero if anything "
         "is missing. It runs inside the image as the `agent` user, with no network.",
