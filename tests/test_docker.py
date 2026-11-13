@@ -407,11 +407,25 @@ async def test_builder_cannot_write_tests_inside_its_container(client, origin):
     assert "sh greet.sh bob" in (clone / "tests/check_greet.sh").read_text()
 
 
-async def test_tester_cannot_write_code_inside_its_container(client, origin):
+async def test_tester_code_changes_are_rejected_after_its_container(client, origin):
+    # The workspace is writable (tests also live next to the code: src/test/, *.spec.ts),
+    # so a code change goes through, and the fence rejects it and resets the step.
     from tests.test_pipeline import TESTER, add_task, scripts
 
     p = make_project(client, origin)
     t = add_task(client, p["id"], scripts(tester=TESTER + "echo x > greet.sh || exit 4\n"))
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=180)
+    row = task(t["id"])
+    assert row.state == TaskState.FAILED
+    assert "the Tester Agent changed files it may not touch: greet.sh" in row.reason
+
+
+async def test_tester_cannot_write_the_toolchain_image_inside_its_container(client, origin):
+    from tests.test_pipeline import TESTER, add_task, scripts
+
+    p = make_project(client, origin)
+    script = TESTER + "mkdir -p .ai-factory && echo x > .ai-factory/x || exit 4\n"
+    t = add_task(client, p["id"], scripts(tester=script))
     await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=180)
     row = task(t["id"])
     assert row.state == TaskState.FAILED and "exited with status 4" in row.reason
