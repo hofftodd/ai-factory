@@ -827,3 +827,20 @@ def test_the_replanner_adds_tests_only_tasks(client, origin):
     assert rows["T9"].no_build is True and rows["T10"].no_build is False
     prompt = review_system_prompt(project, {}, list(rows.values()), "acceptance failed", "")
     assert '"tests_only": true' in prompt and "the test is wrong, not the code" in prompt
+
+
+def test_a_suite_failing_without_a_failed_test_says_what_went_wrong():
+    from ai_factory.orchestrator.runner import suite_failure
+
+    assert suite_failure(2, 9, 1, []) == "2 of 9 failed"
+    tail = [
+        "BUILD SUCCESSFUL in 53s",
+        "==== Front end tests (Angular / vitest) ====",
+        "Error: Could not find the '@angular/build:unit-test' builder's node package.",
+        "npm notice To update run: npm install -g npm@12.2.2",
+    ]
+    said = suite_failure(0, 91, 1, tail)
+    assert said.startswith("no test failed (91 passed), but tests/run.sh exited with status 1")
+    assert "Could not find the '@angular/build:unit-test'" in said
+    assert "BUILD SUCCESSFUL" not in said and "npm notice" not in said
+    assert suite_failure(0, 1, 2, []).endswith("see the end of its output")

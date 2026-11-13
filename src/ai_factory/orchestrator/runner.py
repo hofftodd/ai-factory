@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import shutil
 import time
 from collections.abc import Callable
@@ -182,6 +183,27 @@ def store_results(
         with contextlib.suppress(OSError):
             testresults.save_report(results_dir, get_settings().reports_dir / str(run.id))
     return run
+
+
+# Lines of a suite's output that say what went wrong outside the tests themselves.
+_ERROR_LINE = re.compile(
+    r"error|cannot|could not|not found|not installed|missing|no such file|failed", re.I
+)
+
+
+def suite_failure(failing: int, total: int, code: int, tail: list[str]) -> str:
+    """Why the suite failed. With no failed test the exit code came from outside the tests
+    (a module whose tests never ran, a build step, a missing package): "0 of N failed"
+    alone told the Builder nothing (larder-2's front end lacked its node packages), so
+    quote the output lines that look like the error."""
+    if failing:
+        return f"{failing} of {total} failed"
+    errors = [ln.strip() for ln in tail if _ERROR_LINE.search(ln)][-5:]
+    said = "; ".join(e[:200] for e in errors) if errors else "see the end of its output"
+    return (
+        f"no test failed ({total} passed), but {SUITE_RUNNER} exited with status {code}: "
+        f"something outside the tests failed, e.g. a module whose tests never ran: {said}"
+    )
 
 
 # An agent step's timeout grows by the task's timeout for each earlier run of that role
@@ -777,7 +799,8 @@ class TaskRunner:
         if run.problem or code != 0 or failing:
             raise StepFailed(
                 f"tests fail after bringing in work merged into {project.milestone_branch} "
-                f"while this task ran: {failing} of {run.passed + failing} failed"
+                f"while this task ran: "
+                + suite_failure(failing, run.passed + failing, code, self._tail)
                 + (f" ({run.problem})" if run.problem else ""),
                 "\n".join(self._tail),
                 kind="validation",
@@ -1166,7 +1189,7 @@ class TaskRunner:
         failing = run.failed + run.errors
         if code != 0 or failing:
             raise StepFailed(
-                f"tests fail: {failing} of {run.passed + failing} failed",
+                "tests fail: " + suite_failure(failing, run.passed + failing, code, self._tail),
                 "\n".join(self._tail),
                 kind="validation",
             )

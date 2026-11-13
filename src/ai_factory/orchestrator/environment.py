@@ -92,7 +92,11 @@ def system_prompt(
         "for each module (e.g. Karma and Jasmine for Angular, not Jest as well). The app's own "
         "dependencies belong in the project's manifest; when you pre-fetch them, don't "
         "install dozens of packages at `@latest` in one command: that tends to fail on "
-        "peer-dependency conflicts.",
+        "peer-dependency conflicts. Each run installs the app's dependencies from its "
+        "lockfile into a fresh checkout (e.g. `npm ci --prefer-offline`), offline: so fill "
+        "the `agent` user's package cache with the libraries the design names, at the "
+        "versions it names (e.g. `npm install` them as `agent` in a throwaway directory, "
+        "then delete the directory but keep `~/.npm`; Gradle's and pip's caches likewise).",
         f"- `{CHECK_SCRIPT}`: a POSIX sh script, one command per tool, proving each one is "
         "installed and works (e.g. printing its version). It must exit non-zero if anything "
         "is missing. It runs inside the image as the `agent` user, with no network.",
