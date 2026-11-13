@@ -191,6 +191,21 @@ def test_parse_files_accepts_only_the_toolchain():
         parse_files(ENV_ANSWER.replace("FROM ai-factory/executor-base", "FROM ubuntu:24.04"))
 
 
+def test_parse_files_takes_a_file_left_open_as_ending_where_the_next_starts():
+    unclosed = ENV_ANSWER.replace("USER agent\n>>>\n", "USER agent\n\n", 1)
+    assert unclosed != ENV_ANSWER
+    files = parse_files(unclosed)
+    assert sorted(files) == [".ai-factory/Dockerfile", ".ai-factory/check.sh"]
+    assert files[".ai-factory/Dockerfile"].rstrip() == (
+        parse_files(ENV_ANSWER)[".ai-factory/Dockerfile"].rstrip()
+    )
+    assert files[".ai-factory/check.sh"] == parse_files(ENV_ANSWER)[".ai-factory/check.sh"]
+    # The last file must still be closed: it may have been cut off.
+    cut = ENV_ANSWER.replace("pytest --version\n>>>\n", "pytest --version\n", 1)
+    with pytest.raises(EnvError, match="missing .ai-factory/check.sh"):
+        parse_files(cut)
+
+
 def test_tester_and_builder_may_not_touch_the_toolchain():
     p = Project(name="p", repo_url="x")
     changed = [".ai-factory/Dockerfile", "src/app.py", "tests/test_app.py"]

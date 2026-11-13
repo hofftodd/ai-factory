@@ -57,7 +57,12 @@ CHECK_TIMEOUT_S = 300
 OUTPUT_TAIL = 60
 ABORT_POLL_S = 1.0
 
-_FILE = re.compile(r"^<<<FILE[ \t]+(\S+)[ \t]*\n(.*?)^>>>[ \t]*$", re.S | re.M)
+# A file ends at its `>>>` line, or where the next file starts: models sometimes forget to
+# close one (deepseek on larder-2 left the Dockerfile open, so it swallowed check.sh). The
+# last file must still be closed, since an unclosed one may have been cut off.
+_FILE = re.compile(
+    r"^<<<FILE[ \t]+(\S+)[ \t]*\n(.*?)(?:^>>>[ \t]*$|(?=^<<<FILE[ \t]))", re.S | re.M
+)
 
 
 class EnvError(ValueError):
