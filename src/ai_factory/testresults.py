@@ -306,12 +306,14 @@ def is_task_case(case: Case, test_files: list[str]) -> bool:
     such as Vitest and Jest use the file's path (`tests/frontend/registry.test.ts`),
     also for a file that failed to load; JUnit uses the class (`com.app.UnitsTest`), and
     TAP converters often name cases after the script and test number (`units.1` for
-    `tests/smoke/units.sh`)."""
+    `tests/smoke/units.sh`). A runner in a module's directory gives the path from there
+    (vitest in `frontend/`: `src/app/app.routes.spec.ts` for
+    `frontend/src/app/app.routes.spec.ts`)."""
     for f in test_files:
-        if case.file and _rel(case.file) == f:
-            return True
-        if case.classname and _rel(case.classname) == f:
-            return True
+        for path in (case.file, case.classname):
+            rel = _rel(path) if path else ""
+            if rel and (rel == f or ("/" in rel and f.endswith("/" + rel))):
+                return True
         stem = PurePosixPath(f).with_suffix("").as_posix()
         dotted = stem.replace("/", ".")
         name = PurePosixPath(f).stem

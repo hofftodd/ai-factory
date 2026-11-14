@@ -182,6 +182,20 @@ def test_vitest_cases_are_found_by_their_path_class_names():
     assert not any(tr.is_task_case(c, ["tests/frontend/other.test.ts"]) for c in cases)
 
 
+def test_cases_named_from_inside_a_module_are_found():
+    # larder-2's T12.2.1: vitest ran in frontend/ and named the case's class
+    # `src/app/app.routes.spec.ts`, so its three failing tests didn't count as the task's
+    # and it was rejected as no_red six times.
+    spec = "frontend/src/app/app.routes.spec.ts"
+    case = tr.Case(name="routes > four paths", classname="src/app/app.routes.spec.ts")
+    assert tr.is_task_case(case, [spec])
+    assert not tr.is_task_case(case, ["frontend/src/app/app.component.spec.ts"])
+    # A bare file name is not a path: it doesn't match by suffix.
+    assert not tr.is_task_case(tr.Case(name="x", file="spec.ts"), ["frontend/app/spec.ts"])
+    # Nor does a path that is only a suffix of a directory name.
+    assert not tr.is_task_case(tr.Case(name="x", file="app/x.spec.ts"), ["webapp/x.spec.ts"])
+
+
 def test_changed_line_coverage(tmp_path):
     def git(*args):
         subprocess.run(
