@@ -1068,6 +1068,12 @@ class TaskRunner:
     async def _tester(self, project: Project, clone: Path, executor: Executor) -> None:
         task = self._check()
         changed = await self._agent(roles.TESTER, project, clone, executor, [])
+        # The task's tests are all it has written since it started, not only this run's: a
+        # retry keeps the branch, so earlier attempts' tests may already be committed (on
+        # larder-2, T12.2.1's Tester found its tests in place, changed nothing, and was
+        # rejected for adding none).
+        earlier = await asyncio.to_thread(gitops.changed_since, clone, gitops.BASE_REF)
+        changed = sorted(set(changed) | {f for f in earlier if roles.is_test_path(project, f)})
         if not changed:
             raise StepFailed("the Tester added no tests for this task", kind="no_tests")
         if task.kind == "acceptance" and not (clone / ACCEPTANCE_RUNNER).is_file():

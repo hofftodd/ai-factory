@@ -583,10 +583,13 @@ async def test_tests_that_already_pass_can_go_back_to_the_tester(client, origin)
     client.post(
         f"/api/gates/{gate['id']}/resolve", json={"approve": False, "note": "test Ann's title"}
     )
-    await drive(Orchestrator(), lambda: task(t["id"]).state != TaskState.BLOCKED, timeout=30)
-    row = task(t["id"])
-    assert not row.tests_ready and not row.no_build
-    assert row.state in (TaskState.QUEUED, TaskState.RUNNING, *TERMINAL)
+    testers = lambda: [r for r in runs_of(t["id"]) if r.step == "tester"]  # noqa: E731
+    await drive(Orchestrator(), lambda: len(testers()) >= 2, timeout=30)
+    # The Tester ran again, with the note. Its tests still pass (the script writes the same
+    # one) and count though unchanged, so the user is asked again rather than the Tester
+    # being told it added no tests.
+    await drive(Orchestrator(), lambda: task(t["id"]).state in {*TERMINAL, TaskState.BLOCKED})
+    assert "no tests" not in (testers()[1].reason or "")
 
 
 # A runner that also runs the acceptance tests, as older projects' runners did.
@@ -866,3 +869,27 @@ def test_a_suite_failing_without_a_failed_test_says_what_went_wrong():
     assert "Could not find the '@angular/build:unit-test'" in said
     assert "BUILD SUCCESSFUL" not in said and "npm notice" not in said
     assert suite_failure(0, 1, 2, []).endswith("see the end of its output")
+
+
+async def test_a_retried_tester_keeps_the_tests_an_earlier_attempt_committed(
+    client, origin, tmp_path
+):
+    # larder-2's T12.2.1: an earlier attempt's tests were already on the task's branch, so
+    # the retried Tester changed nothing and was rejected for adding no tests.
+    mark = tmp_path / "second-attempt"
+    tester = (
+        f"if [ -f tests/check_greet.sh ]; then touch {mark}; exit 0; fi\n"
+        + RUNNER
+        + f"echo 'test ! -f {mark}' > tests/check_greet.sh\n"
+    )
+    p = make_project(client, origin)
+    t = add_task(client, p["id"], scripts(tester=tester, builder=NO_BUILDER))
+    orch = Orchestrator()
+    await drive(orch, lambda: task(t["id"]).state == TaskState.BLOCKED, timeout=60)
+    gate = next(g for g in client.get("/api/gates").json() if g["task_id"] == t["id"])
+    client.post(f"/api/gates/{gate['id']}/resolve", json={"approve": False, "note": "again"})
+    built = lambda: any(r.step == "builder" for r in runs_of(t["id"]))  # noqa: E731
+    await drive(orch, lambda: built() or task(t["id"]).state in TERMINAL, timeout=60)
+    runs = runs_of(t["id"])
+    assert [r.step for r in runs] == ["tester", "tester", "builder"], [r.reason for r in runs]
+    assert runs[1].failure_kind in ("", None)
