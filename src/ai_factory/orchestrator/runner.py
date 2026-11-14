@@ -1111,6 +1111,22 @@ class TaskRunner:
             )
             self._update_task(tests_ready=True, tests_commit=gitops.head(clone), no_build=True)
             return
+        if self._setup_only(task, changed):
+            # Only how the tests run changed (e.g. tests/run.sh now installs packages): no
+            # test of the task's own can fail first, and there is nothing to build.
+            if not green:
+                raise StepFailed(
+                    "this task changes only how the tests run, and the suite fails",
+                    "\n".join(self._tail),
+                    kind="validation",
+                )
+            self._emit(
+                "system",
+                "the task changes only how the tests run: no Builder step; it merges once "
+                "the suite passes",
+            )
+            self._update_task(tests_ready=True, tests_commit=gitops.head(clone), no_build=True)
+            return
         if result is not None and self._needs_red(task) and not self._task_failures(result[0]):
             if green and self._task_cases(result[0]):
                 self._update_task(tests_ready=True, tests_commit=gitops.head(clone))
@@ -1524,6 +1540,16 @@ class TaskRunner:
                 )
             ).first()
         return built is None
+
+    def _setup_only(self, task: Task, changed: list[str]) -> bool:
+        """The Tester changed only the test runner, the services script or test
+        configuration files, and no test (larder-2's T12.1: "the test runner installs the
+        front end's packages", rejected three times for having no failing test)."""
+        if task.kind in ("setup", "acceptance"):
+            return False
+        return bool(changed) and all(
+            f in (SUITE_RUNNER, SERVICES_SCRIPT) or roles.is_test_config_file(f) for f in changed
+        )
 
     def _acceptance_only(self, task: Task, project: Project, changed: list[str]) -> bool:
         """The Tester changed only acceptance tests (a feature task the Task Planner added

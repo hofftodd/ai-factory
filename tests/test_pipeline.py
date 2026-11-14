@@ -518,6 +518,28 @@ async def test_a_task_that_changes_only_acceptance_tests_merges_without_a_builde
     assert not (repo / "builder-ran.txt").exists()
 
 
+async def test_a_task_that_changes_only_the_test_runner_merges_without_a_builder(client, origin):
+    # larder-2's T12.1 ("the test runner installs the front end's packages") changes no
+    # test, so none could fail first: it was rejected as no_red until it was split.
+    p = make_project(client, origin)
+    first = add_task(client, p["id"], scripts(), title="Greet")
+    runner = RUNNER.replace("pass=0;", "echo installing >&2\npass=0;", 1)
+    t = add_task(
+        client,
+        p["id"],
+        scripts(tester=runner, builder=NO_BUILDER),
+        title="The test runner installs packages",
+        deps=[first["id"]],
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.DONE, row.reason
+    assert row.no_build and [r.step for r in runs_of(t["id"])] == ["tester"]
+    repo = gitops.repo_dir(p["id"])
+    assert "echo installing" in (repo / "tests" / "run.sh").read_text()
+    assert not (repo / "builder-ran.txt").exists()
+
+
 ALREADY_PASSING = (
     'mkdir -p tests\necho \'test "$(sh greet.sh ann)" = "hello ann"\' > tests/check_ann.sh\n'
 )
