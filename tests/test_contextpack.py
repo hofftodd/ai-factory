@@ -246,3 +246,18 @@ def test_briefs_name_test_files_that_live_with_the_code(tmp_path):
     for role in ("tester", "builder"):
         pack = build_role_pack(project, task, repo, role, docs={}, test_paths=["tests"])
         assert "a module's `src/test/`" in pack.text and "`*Test.kt`" in pack.text
+
+
+def test_testers_own_how_the_tests_run_and_commit_the_lockfile(tmp_path):
+    # larder-2's T12.1.1: the Tester wrote a check that the Builder should install the
+    # front end's packages, though only the Tester may change tests/run.sh; and setup had
+    # gitignored package-lock.json, so `npm ci` could never work.
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T1", title="Runner installs packages", req_refs=[])
+    tester = build_role_pack(project, task, repo, "tester", docs={}, test_paths=["tests"]).text
+    assert "How the tests run is yours alone" in tester and "no Builder runs after" in tester
+    builder = build_role_pack(project, task, repo, "builder", docs={}, test_paths=["tests"]).text
+    assert "yours alone" not in builder
+    for text in (tester, builder):
+        assert "Commit the lockfile" in text and "npm install --no-audit" in text

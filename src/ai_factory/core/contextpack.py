@@ -328,7 +328,9 @@ RESULTS_CONTRACT = [
     "without the project's code. So `tests/run.sh` installs them from the lockfile when "
     "they're missing, before running a module's tests (e.g. `[ -d frontend/node_modules ] "
     "|| (cd frontend && npm ci --prefer-offline --no-audit)`), and so does "
-    "`scripts/start.sh`.",
+    "`scripts/start.sh`. Commit the lockfile (`package-lock.json` and the like): never "
+    "list it in `.gitignore`. Where there is none yet, fall back to `npm install --no-audit "
+    "--no-fund`, since `npm ci` needs one.",
     "There is no internet access: use only what the toolchain image provides.",
     "",
 ]
@@ -558,6 +560,11 @@ def build_role_pack(
             "The whole suite must be able to pass once this task is built. If an existing "
             "test checks that something this task implements is missing or unimplemented, "
             "or pins behaviour this task changes, update or remove that test.",
+            f"How the tests run is yours alone: `tests/run.sh`, `{SERVICES_SCRIPT}` and the "
+            "test configuration. The Builder can't change them. So when this task is about "
+            "how the tests run (e.g. the runner must install packages first), make that "
+            "change yourself and leave the suite passing: no Builder runs after a change "
+            "like that. Never write a check that fails until someone else makes it.",
             "",
         ]
     else:
