@@ -228,7 +228,7 @@ def test_environment_agent_is_told_how_tests_run():
 
 DENIED = (
     "permission denied while trying to connect to the Docker daemon socket at "
-    "unix:///var/run/docker.sock: Head \"http://%2Fvar%2Frun%2Fdocker.sock/_ping\""
+    'unix:///var/run/docker.sock: Head "http://%2Fvar%2Frun%2Fdocker.sock/_ping"'
 )
 
 
