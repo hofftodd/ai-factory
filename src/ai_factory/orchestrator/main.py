@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from ai_factory import engine, gitops, residency, sandbox
+from ai_factory import engine, gitops, leases, residency, sandbox
 from ai_factory.config import get_settings
 from ai_factory.core import gates, roles, spend
 from ai_factory.core.models import (
@@ -78,6 +78,7 @@ def recover() -> None:
         assert run.id is not None
         if run.handle:
             kill_handle(run.handle, 2)
+        release_lease(run.node_id, run.model, run.lease_id)
         finish_run(run.id, RunState.INTERRUPTED, "orchestrator restarted during run")
         with session() as s:
             row = s.get(TaskRun, run.id)
@@ -112,8 +113,18 @@ def recover() -> None:
         jobs = s.exec(select(PlannerJob).where(PlannerJob.state == JobState.RUNNING)).all()
     for job in jobs:
         assert job.id is not None
+        release_lease(job.node_id, job.model, job.lease_id)
         if finish_job(job.id, (JobState.RUNNING,), JobState.FAILED, "orchestrator restarted"):
             JobRunner(job.id)._after_failure("orchestrator restarted; send your message again")
+
+
+def release_lease(node_id: int | None, model: str, lease_id: str) -> None:
+    """Release the ai-swap lease a run or job cut off by the restart still held."""
+    if not lease_id or node_id is None:
+        return
+    with session() as s:
+        node = s.get(Node, node_id)
+    leases.release(node, model, lease_id)
 
 
 def recover_projects() -> None:

@@ -47,7 +47,7 @@ from ai_factory.db import session
 from ai_factory.engine import docker_access_problem, docker_env
 from ai_factory.llm import Aborted
 from ai_factory.planner import BASE_IMAGE, doc_path
-from ai_factory.sandbox import Proc, kill_handle
+from ai_factory.sandbox import kill_handle, local_proc
 
 if TYPE_CHECKING:
     from ai_factory.orchestrator.jobs import JobRunner
@@ -198,7 +198,7 @@ async def run_check(tag: str, context: Path, on_handle: Callable[[str], None]) -
         env=docker_env(),
         start_new_session=True,
     )  # fmt: skip
-    check = Proc(f"local:{proc.pid}", proc)
+    check = local_proc(proc)
     on_handle(check.handle)
     lines: list[str] = []
 

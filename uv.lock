@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -7,10 +7,19 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "ai-common"
+version = "0.1.0"
+source = { git = "https://github.com/hofftodd/ai-common.git#880b5ff2b854ea2aaf962a1c4a1d7971edaec8fb" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[[package]]
 name = "ai-factory"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "ai-common" },
     { name = "anthropic" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -30,6 +39,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ai-common", git = "https://github.com/hofftodd/ai-common.git" },
     { name = "anthropic", specifier = ">=1.13.0" },
     { name = "fastapi", specifier = ">=0.143.0" },
     { name = "httpx", specifier = ">=0.28.1" },

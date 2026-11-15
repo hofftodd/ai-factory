@@ -383,7 +383,11 @@ Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
   no price. Health checks on ai-swap nodes look at the node's own model: one
   that failed to load, or that ai-swap no longer offers, makes the node
   unhealthy (a merely unloaded model is fine). When several loaded choices
-  are free, parallel steps go to a machine with nothing running first.
+  are free, parallel steps go to a machine with nothing running first. Each
+  Tester/Builder step and planning call on an ai-swap node holds a lease on
+  its model while it runs, so another client can't swap it out mid-step. If
+  ai-swap has API keys switched on, give the import the key or set
+  `AI_FACTORY_SWAP_API_KEY`.
 
 Then add a project, choose a model for each agent (node + model), and start
 talking to the Project Planning Agent.
@@ -425,7 +429,10 @@ its Settings; nothing else changes.
 | `AI_FACTORY_CONTAINER_HOST_IP` | `auto` | What `host.docker.internal` maps to inside containers: `host-gateway`, or Lima's host address (`192.168.5.2`) on Lima |
 | `AI_FACTORY_NODE_CHECK_S` | `60` | Seconds between node health checks (`0` disables them) |
 | `AI_FACTORY_SWAP_WAIT_S` | `1800` | On [ai-swap](https://github.com/hofftodd/ai-swap) nodes, the longest a task step or planner call waits rather than make a machine swap out a model other running work is using (`0` = no limit) |
-| `AI_FACTORY_SEARCH_URL` | *(empty)* | A [SearXNG](https://docs.searxng.org/) instance (JSON API) for the Project Planner's web research on local models. Claude uses its own web search |
+| `AI_FACTORY_SWAP_API_KEY` | *(empty; else `AI_SWAP_API_KEY`)* | Key for ai-swap nodes that have none of their own, sent as `Authorization: Bearer …` on chat calls, status and model listings, health checks, node import and leases. Goes to every OpenAI-compatible node without a key, never to Claude nodes. Imported nodes don't store it |
+| `AI_FACTORY_LEASE_TTL_S` | `600` | How long an ai-swap lease on a running step's model lasts unless renewed (renewed every third of it) |
+| `AI_FACTORY_SEARCH_URL` | *(empty)* | [ai-search](https://github.com/hofftodd/ai-search) or a [SearXNG](https://docs.searxng.org/) instance (JSON API) for the Project Planner's web research on local models; several comma-separated URLs are tried in order (e.g. a LAN name, then a Tailscale name). Claude uses its own web search |
+| `AI_FACTORY_SEARCH_TOKEN` | *(empty)* | Sent to the search service as `Authorization: Bearer …` (ai-search's `AI_SEARCH_TOKEN`) |
 
 ## Architecture
 

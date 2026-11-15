@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from ai_common import sandbox as common
+
 from ai_factory import sandbox
-from ai_factory.sandbox import Proc
+from ai_factory.sandbox import local_proc
 
 
 async def _lines(script: str) -> list[str]:
@@ -17,7 +19,7 @@ async def _lines(script: str) -> list[str]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    p = Proc(f"local:{proc.pid}", proc)
+    p = local_proc(proc)
     out = [line async for line in p.lines()]
     assert await p.wait() == 0
     return out
@@ -42,12 +44,12 @@ async def test_lines_split_across_reads_and_a_last_line_without_newline():
 
 async def test_a_line_over_the_cap_is_cut_with_a_note(monkeypatch):
     monkeypatch.setattr(sandbox, "MAX_LINE_BYTES", 1000)
-    monkeypatch.setattr(sandbox, "READ_CHUNK", 300)
+    monkeypatch.setattr(common, "READ_CHUNK", 300)
     out = await _lines("import sys; sys.stdout.write('y' * 5000 + '\\nnext\\n')")
-    assert out == ["y" * 1000 + sandbox.cut_note(4000), "next"]
+    assert out == ["y" * 1000 + common.cut_note(4000, "ai-factory"), "next"]
 
 
 async def test_multibyte_characters_split_between_reads(monkeypatch):
-    monkeypatch.setattr(sandbox, "READ_CHUNK", 7)
+    monkeypatch.setattr(common, "READ_CHUNK", 7)
     out = await _lines("import sys; sys.stdout.write('héllo wörld ✓\\n')")
     assert out == ["héllo wörld ✓"]

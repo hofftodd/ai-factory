@@ -441,6 +441,23 @@ models each machine has loaded (`ai-factory/residency.py`) and:
   unloaded for good);
 - after `AI_FACTORY_SWAP_WAIT_S` (30 minutes) of waiting, starts anyway.
 
+Once work has started, a **lease** keeps its model in place
+(`src/ai_factory/leases.py`). Each Tester/Builder step (or single-step
+executor run) and each planning job on an ai-swap node takes an ai-swap lease
+on its model, owned by `ai-factory/<project>/<task key>` (or
+`ai-factory/<project>/planner`), so ai-swap treats the model as busy for the
+whole step, pauses included: a load that needs its memory waits instead of
+evicting it. The lease is renewed every third of `AI_FACTORY_LEASE_TTL_S`
+(10 minutes) and released when the step ends, whether it succeeded, failed,
+was stopped or was cut off by a shutdown. Its id is kept on the run, so after a
+crash the restart releases it; otherwise it would lapse on its own after the
+TTL. A refused lease (or an older ai-swap without the lease API) doesn't stop
+the step; residency above still decides where and when it starts.
+
+ai-factory sends each node's API key, else `AI_FACTORY_SWAP_API_KEY`, on
+every call to an ai-swap endpoint: chat, `/api/status`, `/v1/models`, health
+checks, node import and leases.
+
 A project's Settings page also warns when two of its agents' models share a
 machine but don't fit in it together, since each hand-over between them would
 then swap models. Nodes that aren't ai-swap endpoints are unaffected.
@@ -448,8 +465,9 @@ then swap models. Nodes that aren't ai-swap endpoints are unaffected.
 The planners are called directly by the orchestrator. The Project
 Planner's web research uses Claude's built-in web search when it runs on
 Claude; on a local model it uses a search server you point ai-factory at
-(`AI_FACTORY_SEARCH_URL`, a SearXNG instance), and ai-factory only fetches public
-pages for it. Both planners read the repository through ai-factory's own
+(`AI_FACTORY_SEARCH_URL`, ai-search or a SearXNG instance, with failover
+between several URLs and an optional `AI_FACTORY_SEARCH_TOKEN`), and
+ai-factory only fetches public pages for it, checking every redirect hop. Both planners read the repository through ai-factory's own
 read-only tools (`repotools.py`), on Claude and on local models alike; tool
 rounds stop when the model's context window is nearly full, and it is then
 asked to answer with what it has. Before each planning chat, ai-factory
@@ -486,7 +504,7 @@ Each repair is logged in the project's activity feed.
 | One task, Tester step to merge | `src/ai_factory/orchestrator/runner.py` |
 | Planning jobs (chat, breakdown, split, review) | `src/ai_factory/orchestrator/jobs.py`, `src/ai_factory/planner.py` |
 | Test results and coverage | `src/ai_factory/testresults.py` |
-| Web research for the Project Planner | `src/ai_factory/research.py` |
+| Web research for the Project Planner | `src/ai_factory/research.py` (on `ai_common.web`) |
 | Read-only repository tools for the planners | `src/ai_factory/repotools.py` |
 | Escalation ladder | `src/ai_factory/orchestrator/escalation.py` |
 | Replanning after each task | `src/ai_factory/orchestrator/replan.py` |
@@ -494,7 +512,8 @@ Each repair is logged in the project's activity feed.
 | Carrying out inbox decisions | `src/ai_factory/orchestrator/gate_actions.py` |
 | Supervisor (Stop / E-stop) | `src/ai_factory/supervisor/main.py` |
 | Model gateway | `src/ai_factory/gateway.py` |
-| Containers and the locked-down network | `src/ai_factory/sandbox.py` |
+| Containers and the locked-down network | `src/ai_factory/sandbox.py` (on [ai-common](https://github.com/hofftodd/ai-common)'s `ai_common.sandbox`) |
+| ai-swap leases on a running step's model | `src/ai_factory/leases.py` |
 | Toolchain images | `src/ai_factory/images.py` |
 | The Environment Agent | `src/ai_factory/orchestrator/environment.py` |
 | Context packs | `src/ai_factory/core/contextpack.py` |

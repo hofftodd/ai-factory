@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import threading
 
 import pytest
@@ -22,10 +23,18 @@ def llm():
     server.stop()
 
 
+class Seen(list[str]):
+    """Request paths, plus each request's Authorization header."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.auth: list[str] = []
+
+
 @pytest.fixture
 def searx(monkeypatch):
     """A stand-in SearXNG: /search?format=json returns two results."""
-    seen: list[str] = []
+    seen = Seen()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -33,6 +42,7 @@ def searx(monkeypatch):
 
         def do_GET(self):  # noqa: N802
             seen.append(self.path)
+            seen.auth.append(self.headers.get("Authorization", ""))
             body = json.dumps(
                 {
                     "results": [
@@ -116,3 +126,13 @@ async def test_planner_without_research_has_no_tools(llm):
 async def test_fetch_refuses_private_addresses(url):
     out = await research.run_tool("web_fetch", {"url": url})
     assert out.startswith("web_fetch failed:")
+
+
+async def test_search_fails_over_and_sends_the_token(searx, monkeypatch):
+    good = os.environ["AI_FACTORY_SEARCH_URL"]
+    # Nothing listens on the first URL: the second answers.
+    monkeypatch.setenv("AI_FACTORY_SEARCH_URL", f"http://127.0.0.1:9, {good}")
+    monkeypatch.setenv("AI_FACTORY_SEARCH_TOKEN", "s3cret")
+    out = await research.run_tool("web_search", {"query": "sqlite"})
+    assert out.startswith("1. SQLite\nhttps://sqlite.org\nembedded")
+    assert "q=sqlite" in searx[-1] and searx.auth == ["Bearer s3cret"]

@@ -13,6 +13,9 @@ Containers run on one of two networks (`StepSpec.network`, from the project):
 - "open": the default bridge plus `host.docker.internal`, for projects whose tests
   need the network.
 
+The Docker arguments, the network, the relay and the output reader are
+`ai_common.sandbox`'s; this module supplies ai-factory's names, labels, mounts and limits.
+
 `LocalRuntime` runs the same commands as a host process group. It provides no
 isolation and exists for tests and development only.
 
@@ -30,21 +33,26 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ai_factory.config import get_settings
-from ai_factory.engine import HOST_ALIAS, detect, docker, docker_env
+from ai_common import sandbox as common
+from ai_common.sandbox import CONTAINER_UID, RELAY_PORT, WORKSPACE, Proc, RunSpec
 
-WORKSPACE = "/workspace"
+from ai_factory.config import get_settings
+from ai_factory.engine import detect, docker, docker_env
+
+__all__ = ["CONTAINER_UID", "RELAY_PORT", "WORKSPACE", "Proc", "local_proc"]
+
 CTL = "/ai-factory"
 RESULTS = "/ai-factory-results"  # where the test runner writes junit.xml and coverage
-CONTAINER_UID = 1000
 NETWORKS = ("isolated", "open")
 RELAY_ALIAS = "ai-factory-gw"
-RELAY_PORT = 8701
 RELAY_URL = f"http://{RELAY_ALIAS}:{RELAY_PORT}"
+# Output lines past this are cut with a note (a coding agent's JSON events can carry whole
+# files on one line; ai_common.sandbox.Proc reads any length, this bounds memory).
+MAX_LINE_BYTES = common.MAX_LINE_BYTES
+CUT_LABEL = "ai-factory"
 
 
 @dataclass
@@ -67,59 +75,13 @@ class StepSpec:
     results_dir: Path | None = None
 
 
-# Output is read in chunks, so a line of any length is fine. A coding agent's JSON
-# events can carry whole files on one line (StreamReader.readline stops at 64 KiB and
-# raised, failing the step); past this much a line is cut, keeping memory bounded.
-READ_CHUNK = 64 * 1024
-MAX_LINE_BYTES = 4 * 1024 * 1024
+def local_proc(proc: asyncio.subprocess.Process) -> Proc:
+    """A host process started here, addressable as ``local:<pgid>``."""
+    return Proc(proc, f"local:{proc.pid}", max_line_bytes=MAX_LINE_BYTES, cut_label=CUT_LABEL)
 
 
-def cut_note(dropped: int) -> str:
-    return f" ...[ai-factory: line cut, {dropped} more bytes]"
-
-
-class Proc:
-    def __init__(self, handle: str, proc: asyncio.subprocess.Process):
-        self.handle = handle
-        self._proc = proc
-
-    async def lines(self) -> AsyncIterator[str]:
-        """Each line of the process's output, without its newline, however long."""
-        assert self._proc.stdout is not None
-        buf = bytearray()
-        dropped = 0  # bytes of the current line past MAX_LINE_BYTES
-
-        def take(part: bytes) -> None:
-            nonlocal dropped
-            room = MAX_LINE_BYTES - len(buf)
-            if room > 0:
-                buf.extend(part[:room])
-            dropped += max(0, len(part) - max(room, 0))
-
-        def line() -> str:
-            nonlocal dropped
-            text = bytes(buf).decode(errors="replace")
-            if dropped:
-                text += cut_note(dropped)
-            buf.clear()
-            dropped = 0
-            return text
-
-        while True:
-            chunk = await self._proc.stdout.read(READ_CHUNK)
-            if not chunk:
-                if buf or dropped:
-                    yield line()
-                return
-            start = 0
-            while (end := chunk.find(b"\n", start)) != -1:
-                take(chunk[start:end])
-                yield line()
-                start = end + 1
-            take(chunk[start:])
-
-    async def wait(self) -> int:
-        return await self._proc.wait()
+def base_labels() -> dict[str, str]:
+    return {"ai-factory": "1", "ai-factory.instance": get_settings().instance_id}
 
 
 class LocalRuntime:
@@ -143,7 +105,7 @@ class LocalRuntime:
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,  # own process group, so Stop kills the whole tree
         )
-        return Proc(f"local:{proc.pid}", proc)
+        return local_proc(proc)
 
 
 class DockerRuntime:
@@ -167,75 +129,46 @@ class DockerRuntime:
             return f"{CONTAINER_UID}:{CONTAINER_UID}"
         return f"{os.getuid()}:{os.getgid()}"
 
-    def docker_args(self, spec: StepSpec) -> list[str]:
+    def run_spec(self, spec: StepSpec) -> RunSpec:
         s = self.settings
-        env = {
-            "HOME": "/tmp/home",
-            "AI_FACTORY_WORKSPACE": WORKSPACE,
-            "AI_FACTORY_CTL": CTL,
-            **({"AI_FACTORY_RESULTS": RESULTS} if spec.results_dir else {}),
-            **spec.env,
-        }
-        args = [
-            "docker",
-            "run",
-            "--rm",
-            "--init",
-            "--name",
-            spec.name,
-            "--user",
-            self._user(spec),
-            "--cpus",
-            s.container_cpus,
-            "--memory",
-            s.container_memory,
-            "--pids-limit",
-            "1024",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            *self._mounts(spec),
-            "-w",
-            WORKSPACE,
-            "--label",
-            "ai-factory=1",
-            "--label",
-            f"ai-factory.instance={s.instance_id}",
-        ]
-        if spec.network == "open":
-            args += ["--add-host", f"{HOST_ALIAS}:{detect().host_ip or 'host-gateway'}"]
-        else:
-            args += ["--network", exec_network()]
-        for k, v in spec.labels.items():
-            args += ["--label", f"{k}={v}"]
-        for k, v in env.items():
-            args += ["-e", f"{k}={v}"]
-        return [*args, spec.image or s.executor_image, *spec.command]
+        isolated = spec.network != "open"
+        return RunSpec(
+            name=spec.name,
+            workspace=spec.workspace,
+            ctl_dir=spec.ctl_dir,
+            ctl_mount=CTL,
+            image=spec.image or s.executor_image,
+            command=spec.command,
+            env={
+                "AI_FACTORY_WORKSPACE": WORKSPACE,
+                "AI_FACTORY_CTL": CTL,
+                **({"AI_FACTORY_RESULTS": RESULTS} if spec.results_dir else {}),
+                **spec.env,
+            },
+            labels={**base_labels(), **spec.labels},
+            user=self._user(spec),
+            cpus=s.container_cpus,
+            memory=s.container_memory,
+            network=exec_network() if isolated else "",
+            add_host="" if isolated else (detect().host_ip or "host-gateway"),
+            workspace_readonly=spec.workspace_readonly,
+            readonly_dirs=spec.readonly_dirs,
+            writable_dirs=spec.writable_dirs,
+            results_dir=spec.results_dir,
+            results_mount=RESULTS if spec.results_dir else "",
+        )
 
-    def _mounts(self, spec: StepSpec) -> list[str]:
-        ws = f"{spec.workspace}:{WORKSPACE}" + (":ro" if spec.workspace_readonly else "")
-        out = ["-v", ws, "-v", f"{spec.ctl_dir}:{CTL}:ro"]
-        for rel, mode in [
-            *((d, "ro") for d in spec.readonly_dirs),
-            *((d, "rw") for d in spec.writable_dirs),
-        ]:
-            out += ["-v", f"{spec.workspace / rel}:{WORKSPACE}/{rel}:{mode}"]
-        if spec.results_dir:
-            out += ["-v", f"{spec.results_dir}:{RESULTS}"]
-        return out
+    def docker_args(self, spec: StepSpec) -> list[str]:
+        return common.docker_args(self.run_spec(spec))
 
     async def start(self, spec: StepSpec) -> Proc:
-        proc = await asyncio.create_subprocess_exec(
-            *self.docker_args(spec),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-            env=docker_env(
-                {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "/tmp")}
-            ),
+        env = docker_env(
+            {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "/tmp")}
         )
-        return Proc(f"docker:{spec.name}", proc)
+        # Stop goes through kill_handle (docker stop with a grace period), not Proc.kill.
+        return await common.start(
+            self.run_spec(spec), env=env, max_line_bytes=MAX_LINE_BYTES, cut_label=CUT_LABEL
+        )
 
 
 Runtime = LocalRuntime | DockerRuntime
@@ -357,9 +290,7 @@ def running_containers() -> dict[str, str]:
 
 # -- isolated executor network ----------------------------------------------
 
-
-class IsolationError(RuntimeError):
-    pass
+IsolationError = common.SandboxError
 
 
 def exec_network() -> str:
@@ -372,17 +303,7 @@ def relay_name() -> str:
 
 def ensure_exec_network() -> None:
     """Create the internal executor network if it doesn't exist."""
-    name = exec_network()
-    if docker("network", "inspect", name).returncode == 0:
-        return
-    s = get_settings()
-    proc = docker(
-        "network", "create", "--internal",
-        "--label", "ai-factory=1", "--label", f"ai-factory.instance={s.instance_id}",
-        name,
-    )  # fmt: skip
-    if proc.returncode != 0 and "already exists" not in proc.stderr:
-        raise IsolationError(f"cannot create network {name}: {proc.stderr.strip()}")
+    common.ensure_network(exec_network(), base_labels(), run=docker)
 
 
 def ensure_relay(gateway_port: int) -> None:
@@ -391,44 +312,22 @@ def ensure_relay(gateway_port: int) -> None:
     The relay sits on the default bridge (so it can reach the host) and on the
     executor network as `ai-factory-gw`. It carries no `ai-factory.run` label, so the
     supervisor's orphan sweep and Stop leave it alone; it holds no state."""
-    ensure_exec_network()
-    name = relay_name()
-    proc = docker(
-        "inspect",
-        "-f",
-        '{{.State.Running}} {{index .Config.Labels "ai-factory.gateway_port"}}',
-        name,
-    )
-    if proc.returncode == 0:
-        if proc.stdout.split() == ["true", str(gateway_port)]:
-            return
-        docker("rm", "-f", name)
-    s = get_settings()
-    eng = detect()
-    proc = docker(
-        "run", "-d", "--name", name,
-        "--user", f"{CONTAINER_UID}:{CONTAINER_UID}",
-        "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-        "--memory", "64m", "--pids-limit", "64",
-        "--add-host", f"{HOST_ALIAS}:{eng.host_ip or 'host-gateway'}",
-        "--label", "ai-factory=1", "--label", f"ai-factory.instance={s.instance_id}",
-        "--label", "ai-factory.role=gateway-relay",
-        "--label", f"ai-factory.gateway_port={gateway_port}",
-        s.executor_image,
-        "socat", f"TCP-LISTEN:{RELAY_PORT},fork,reuseaddr",
-        f"TCP:{HOST_ALIAS}:{gateway_port}",
+    ensure_exec_network()  # with the network's own labels, before the relay's
+    relay = common.Relay(
+        name=relay_name(),
+        alias=RELAY_ALIAS,
+        network=exec_network(),
+        image=get_settings().executor_image,
+        labels={**base_labels(), "ai-factory.role": "gateway-relay"},
+        user=f"{CONTAINER_UID}:{CONTAINER_UID}",
+        host_ip=detect().host_ip or "host-gateway",
+        port_label="ai-factory.gateway_port",
         timeout=60,
-    )  # fmt: skip
-    if proc.returncode != 0:
-        raise IsolationError(f"cannot start the gateway relay: {proc.stderr.strip()[:300]}")
-    proc = docker("network", "connect", "--alias", RELAY_ALIAS, exec_network(), name)
-    if proc.returncode != 0 and "already exists" not in proc.stderr:
-        docker("rm", "-f", name)
-        raise IsolationError(f"cannot attach the relay: {proc.stderr.strip()[:300]}")
+    )
+    common.ensure_relay(relay, gateway_port, run=docker)
 
 
 def teardown_isolation() -> None:
     """Remove the relay and the executor network (best effort; on orchestrator exit).
     The network stays if executor containers are still attached to it."""
-    docker("rm", "-f", relay_name())
-    docker("network", "rm", exec_network())
+    common.teardown(relay_name(), exec_network(), run=docker)

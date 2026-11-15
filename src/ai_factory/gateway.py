@@ -36,6 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from ai_factory import residency
 from ai_factory.core import roles, spend, watchdog
 from ai_factory.core.contextpack import estimate_tokens
 from ai_factory.core.models import Node, Project, RunState, Task, TaskRun, TaskState
@@ -214,11 +215,12 @@ class Gateway:
             # in the API version (e.g. http://host:8080/v1), so drop ours.
             upstream = f"{base}/{path.removeprefix('v1/').lstrip('/')}"
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_HEADERS}
-        if info.node.api_key:
+        key = residency.api_key(info.node)
+        if key:
             if claude:
-                headers["x-api-key"] = info.node.api_key
+                headers["x-api-key"] = key
             else:
-                headers["Authorization"] = f"Bearer {info.node.api_key}"
+                headers["Authorization"] = f"Bearer {key}"
 
         if request.method == "GET":
             r = await self.client.get(upstream, headers=headers, params=request.query_params)
