@@ -184,6 +184,44 @@ def test_parse_status_with_peers_and_duplicate_names():
     assert v.ids["flint"] == ("studio", "flint") and v.ids["flint@mini"] == ("mini", "flint")
 
 
+def test_pinned_ids_resolve_for_the_endpoints_own_models():
+    """ai-swap lists its own models bare ("flint"), but nodes imported from it pin them
+    ("flint@studio"); swap avoidance must still see them."""
+    status = {
+        "node": {
+            "name": "studio",
+            "memory_budget_gb": 220,
+            "models": [{"name": "flint", "state": "ready", "memory_gb": 36}],
+        },
+        "peers": [
+            {
+                "online": True,
+                "node": {
+                    "name": "mini",
+                    "memory_budget_gb": 32,
+                    "models": [{"name": "gemma", "state": "stopped", "memory_gb": 30}],
+                },
+            }
+        ],
+    }
+    listed = {"data": [{"id": "flint", "node": "studio"}, {"id": "gemma", "node": "mini"}]}
+    v = residency._parse(status, listed)
+    assert v.ids["flint@studio"] == ("studio", "flint") == v.ids["flint"]
+    assert v.ids["gemma@mini"] == ("mini", "gemma")
+    assert "flint@mini" not in v.ids
+
+
+def test_pinned_ids_get_swap_avoidance(client):
+    nid = add_node(client)
+    cluster(32, thinkingcap=("ready", 30, "1"), gemma=("stopped", 30, ""))
+    p = residency.placement(node(nid), "gemma@gpu")
+    assert p is not None and p.machine.name == "gpu" and p.model.name == "gemma"
+    reason = residency.blocker(node(nid), "gemma@gpu", {("gpu", "thinkingcap"): "alpha's tester"})
+    assert "would swap out thinkingcap (alpha's tester)" in reason
+    assert residency.warm(node(nid), "thinkingcap@gpu")
+    assert not residency.warm(node(nid), "gemma@gpu")
+
+
 # -- scheduling ---------------------------------------------------------------------------
 
 

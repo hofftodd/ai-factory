@@ -126,7 +126,11 @@ def _parse(status: dict[str, Any], models: dict[str, Any]) -> View:
     for e in models.get("data") or []:
         mid, machine = e.get("id"), e.get("node")
         if mid and machine:
-            ids[mid] = (machine, mid.split("@", 1)[0])
+            name = mid.split("@", 1)[0]
+            ids[mid] = (machine, name)
+            # ai-swap lists a model bare unless two machines have one of that name (the
+            # endpoint's own models always are), but pinned ids work too: "flint@studio".
+            ids.setdefault(f"{name}@{machine}", (machine, name))
     return View(machines, ids, time.monotonic())
 
 
