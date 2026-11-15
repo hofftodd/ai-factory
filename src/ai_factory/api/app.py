@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from ai_common.swap import auth_headers
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -792,8 +793,10 @@ async def import_nodes(body: NodeImport) -> dict[str, Any]:
     if not u.scheme or not u.netloc:
         raise HTTPException(400, "base_url must look like http://host:port")
     root = f"{u.scheme}://{u.netloc}"
-    key = body.api_key or os.environ.get("AI_SWAP_API_KEY", "")
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    # The nodes keep only a key given here; without one they use AI_FACTORY_SWAP_API_KEY
+    # (residency.api_key), so the global key isn't copied into the database.
+    key = body.api_key or get_settings().swap_api_key
+    headers = auth_headers(key)
     try:
         async with httpx.AsyncClient(timeout=10, headers=headers) as client:
             st, md = await asyncio.gather(
@@ -803,7 +806,7 @@ async def import_nodes(body: NodeImport) -> dict[str, Any]:
     except (httpx.HTTPError, ValueError) as e:
         raise HTTPException(502, f"cannot read {root}: {e}") from e
     if st.status_code in (401, 403) or md.status_code in (401, 403):
-        raise HTTPException(502, f"{root} refused the API key (set AI_SWAP_API_KEY)")
+        raise HTTPException(502, f"{root} refused the API key (set AI_FACTORY_SWAP_API_KEY)")
     if st.status_code != 200 or not isinstance(status, dict) or "node" not in status:
         raise HTTPException(400, f"{root} is not an ai-swap endpoint (no /api/status)")
     if md.status_code != 200 or not isinstance(listed, dict):
@@ -830,7 +833,7 @@ async def import_nodes(body: NodeImport) -> dict[str, Any]:
             name=pinned,
             base_url=root + "/v1",
             context_window=max(1024, window),
-            api_key=key,
+            api_key=body.api_key,
             capacity=1,
             models=[pinned],
             price_in=0.0,

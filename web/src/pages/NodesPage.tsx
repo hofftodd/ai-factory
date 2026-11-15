@@ -160,7 +160,7 @@ function ImportFromSwap({ onImported }: { onImported: () => void }) {
         <Field label="ai-swap URL">
           <input className="mono" value={url} placeholder="http://studio.local:8080" onChange={(e) => setUrl(e.target.value)} />
         </Field>
-        <Field label="API key" hint="Optional; default AI_SWAP_API_KEY from ai-factory's environment">
+        <Field label="API key" hint="Optional; without one, AI_FACTORY_SWAP_API_KEY (or AI_SWAP_API_KEY) from ai-factory's environment">
           <input type="password" value={key} onChange={(e) => setKey(e.target.value)} />
         </Field>
       </div>

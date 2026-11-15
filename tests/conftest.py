@@ -30,6 +30,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("AI_FACTORY_GATEWAY_PORT", "0")  # ephemeral: tests run side by side
     monkeypatch.setenv("AI_FACTORY_NODE_CHECK_S", "0")  # tests call check_nodes() themselves
     monkeypatch.delenv("AI_FACTORY_TOKEN", raising=False)
+    for key in ("AI_FACTORY_SWAP_API_KEY", "AI_SWAP_API_KEY", "AI_FACTORY_SEARCH_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
     reset_engine_cache()
     from ai_factory import residency
 

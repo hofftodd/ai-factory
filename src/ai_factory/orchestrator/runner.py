@@ -22,7 +22,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from ai_factory import appcheck, gitops, images, llm, review, sandbox, testresults
+from ai_factory import appcheck, gitops, images, leases, llm, review, sandbox, testresults
 from ai_factory.config import get_settings
 from ai_factory.core import gates, roles, spend, watchdog
 from ai_factory.core.contextpack import build_pack, build_role_pack
@@ -281,6 +281,30 @@ class TaskRunner:
             run.handle = handle
             s.add(run)
             s.commit()
+
+    def _lease(
+        self, node: Node | None, model: str, step: str
+    ) -> contextlib.AbstractAsyncContextManager[Any]:
+        """An ai-swap lease on the step's model for as long as the step runs (leases.py),
+        recorded on this run so a restart can release it."""
+        task, project = self._load()
+        run_id = self.run_id
+
+        def record(lease_id: str) -> None:
+            with session() as s:
+                run = s.get(TaskRun, run_id)
+                if run is not None:
+                    run.lease_id = lease_id
+                    s.add(run)
+                    s.commit()
+
+        return leases.hold(
+            node,
+            model,
+            leases.owner(project.name, task.key or str(self.task_id)),
+            reason=f"{step} step",
+            record=record,
+        )
 
     def _emit(self, kind: str, message: str, **data: object) -> None:
         task, _ = self._load()
@@ -679,9 +703,10 @@ class TaskRunner:
         self._emit(
             "system", f"executor {kind} starting" + (f" on {node.name} / {model}" if node else "")
         )
-        code = await self._step(
-            "execute", inv.command, inv.env, "log", task.timeout_s, output=inv.output
-        )
+        async with self._lease(node, model, "execute"):
+            code = await self._step(
+                "execute", inv.command, inv.env, "log", task.timeout_s, output=inv.output
+            )
         task = self._check()
         await asyncio.to_thread(gitops.commit_all, clone, f"Task {self.task_id}: {task.title}")
         if code == EXIT_CONFIG and executor.needs_node:
@@ -1018,15 +1043,16 @@ class TaskRunner:
             mounts |= {"readonly_dirs": [roles.ENV_DIR]}
         else:
             mounts |= {"readonly_dirs": [*test_paths, roles.ENV_DIR]}
-        code = await self._step(
-            role,
-            with_services(inv.command),
-            inv.env,
-            "log",
-            self._agent_timeout(task, role),
-            output=inv.output,
-            **mounts,
-        )
+        async with self._lease(node, model, role):
+            code = await self._step(
+                role,
+                with_services(inv.command),
+                inv.env,
+                "log",
+                self._agent_timeout(task, role),
+                output=inv.output,
+                **mounts,
+            )
         task = self._check()
         await asyncio.to_thread(
             gitops.commit_all, clone, f"Task {task.key or self.task_id} ({role}): {task.title}"

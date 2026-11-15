@@ -103,6 +103,8 @@ class FakeLLM:
         # entries (with "node", "status", "context_length") in place of the default.
         self.swap_status: dict[str, Any] | None = None
         self.swap_models: list[dict[str, Any]] = []
+        # ai-swap lease requests while acting as ai-swap: (method, path, body).
+        self.leases: list[tuple[str, str, Any]] = []
         self.disconnected = threading.Event()
         outer = self
 
@@ -159,12 +161,20 @@ class FakeLLM:
                 outer.requests.append(req)
                 outer.headers.append(dict(self.headers.items()))
                 path = self.path.split("?", 1)[0].rstrip("/")
-                if path.endswith("/chat/completions"):
+                if path == "/api/leases" and outer.swap_status is not None:
+                    outer.leases.append(("POST", self.path, req))
+                    n = sum(1 for m, _, _ in outer.leases if m == "POST")
+                    self._json(200, {"lease_id": f"L{n}", "lease": {}, "node": "studio"})
+                elif path.endswith("/chat/completions"):
                     self._openai(req)
                 elif path.endswith("/messages"):
                     self._anthropic(req)
                 else:
                     self._json(404, {"error": "not found"})
+
+            def do_DELETE(self) -> None:  # noqa: N802
+                outer.leases.append(("DELETE", self.path, None))
+                self._json(200, {"released": True})
 
             # -- OpenAI-compatible ------------------------------------------
 

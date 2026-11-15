@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import delete, update
 from sqlmodel import col, select
 
-from ai_factory import gitops
+from ai_factory import gitops, leases
 from ai_factory.core import gates, roles, spend
 from ai_factory.core.contextpack import estimate_tokens, repo_files
 from ai_factory.core.models import (
@@ -280,18 +280,14 @@ class JobRunner:
             if node is None or not model:
                 role = roles.ROLES[job_role(self.kind)].name
                 raise JobFailed(f"no planner node/model configured for this project ({role})")
-            if self.kind == JobKind.CHAT:
-                await self._chat(node, model)
-            elif self.kind == JobKind.DECOMPOSE:
-                await self._decompose(node, model)
-            elif self.kind == JobKind.SPLIT:
-                await self._split(node, model)
-            elif self.kind == JobKind.ENVIRONMENT:
-                from ai_factory.orchestrator.environment import run_environment
-
-                await run_environment(self, node, model)
-            else:
-                await self._review(node, model)
+            async with leases.hold(
+                node,
+                model,
+                leases.owner(project.name, "planner"),
+                reason=f"planner {self.kind.value}",
+                record=self._record_lease,
+            ):
+                await self._dispatch(node, model)
         except Aborted:
             self._flush()
             finish_job(self.job_id, (JobState.RUNNING,), JobState.STOPPED, "stopped by user")
@@ -308,6 +304,28 @@ class JobRunner:
             f"planner {self.kind.value} finished",
             job_id=self.job_id,
         )
+
+    async def _dispatch(self, node: Node, model: str) -> None:
+        if self.kind == JobKind.CHAT:
+            await self._chat(node, model)
+        elif self.kind == JobKind.DECOMPOSE:
+            await self._decompose(node, model)
+        elif self.kind == JobKind.SPLIT:
+            await self._split(node, model)
+        elif self.kind == JobKind.ENVIRONMENT:
+            from ai_factory.orchestrator.environment import run_environment
+
+            await run_environment(self, node, model)
+        else:
+            await self._review(node, model)
+
+    def _record_lease(self, lease_id: str) -> None:
+        with session() as s:
+            job = s.get(PlannerJob, self.job_id)
+            if job is not None:
+                job.lease_id = lease_id
+                s.add(job)
+                s.commit()
 
     def _fail(self, error: str) -> None:
         self._flush()

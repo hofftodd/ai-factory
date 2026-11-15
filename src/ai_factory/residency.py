@@ -35,8 +35,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from ai_common.swap import auth_headers
 from sqlmodel import select
 
+from ai_factory.config import get_settings
 from ai_factory.core.models import JobState, Node, PlannerJob, Project, RunState, TaskRun
 from ai_factory.db import session
 
@@ -100,6 +102,19 @@ def root(node: Node) -> str:
     return f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else ""
 
 
+def api_key(node: Node) -> str:
+    """The key to send an OpenAI-compatible node (an ai-swap endpoint, usually): its own,
+    else ``AI_FACTORY_SWAP_API_KEY``. Claude nodes only ever get their own."""
+    if node.api_key or node.provider != "openai":
+        return node.api_key
+    return get_settings().swap_api_key
+
+
+def headers(node: Node) -> dict[str, str]:
+    """``Authorization: Bearer <key>`` for the node, when it has a key."""
+    return auth_headers(api_key(node))
+
+
 def _parse(status: dict[str, Any], models: dict[str, Any]) -> View:
     machines: dict[str, Machine] = {}
     nodes = [status.get("node") or {}] + [
@@ -141,7 +156,8 @@ async def fetch(node: Node, client: httpx.AsyncClient) -> View | None:
         return None
     try:
         st, md = await asyncio.gather(
-            client.get(base + "/api/status"), client.get(base + "/v1/models")
+            client.get(base + "/api/status", headers=headers(node)),
+            client.get(base + "/v1/models", headers=headers(node)),
         )
         if st.status_code != 200 or md.status_code != 200:
             return None

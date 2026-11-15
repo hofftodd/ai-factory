@@ -49,14 +49,26 @@ class Settings:
     # Managed Lima VM size (macOS); 0 = derived from this machine.
     vm_cpus: int = field(default_factory=lambda: int(_env("VM_CPUS", "0")))
     vm_memory_gib: int = field(default_factory=lambda: int(_env("VM_MEMORY_GIB", "0")))
-    # Web search for the Project Planning Agent on local models: a SearXNG URL (JSON
-    # output enabled). Claude nodes use Anthropic's own search and need nothing here.
+    # Web search for the Project Planning Agent on local models: ai-search or a SearXNG URL
+    # (JSON output enabled); several comma-separated URLs fail over in order. Claude nodes
+    # use Anthropic's own search and need nothing here.
     search_url: str = field(default_factory=lambda: _env("SEARCH_URL", ""))
+    # Optional Bearer token for the search service (ai-search's AI_SEARCH_TOKEN).
+    search_token: str = field(default_factory=lambda: _env("SEARCH_TOKEN", ""))
     # How often the orchestrator checks each node's health.
     node_check_s: float = field(default_factory=lambda: float(_env("NODE_CHECK_S", "60")))
     # Longest a task step or planner call waits rather than make an ai-swap machine swap out
     # a model other running work is using (ai_factory.residency). 0 = wait as long as it takes.
     swap_wait_s: float = field(default_factory=lambda: float(_env("SWAP_WAIT_S", "1800")))
+    # API key for ai-swap nodes that have none of their own (ai-swap's node.api_key; also
+    # read from AI_SWAP_API_KEY). Sent as a Bearer token on chat calls, /api/status,
+    # /v1/models, health checks, node import and leases. Empty = no key.
+    swap_api_key: str = field(
+        default_factory=lambda: _env("SWAP_API_KEY", "") or os.environ.get("AI_SWAP_API_KEY", "")
+    )
+    # How long an ai-swap lease on a step's model lasts unless renewed (renewed every third
+    # of it while the step runs; ai_factory.leases).
+    lease_ttl_s: int = field(default_factory=lambda: int(_env("LEASE_TTL_S", "600")))
 
     @property
     def db_path(self) -> Path:

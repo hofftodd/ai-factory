@@ -282,7 +282,7 @@ async def _openai_round(
     tools: list[dict[str, Any]],
 ) -> tuple[ChatResult, list[dict[str, Any]]]:
     """One streamed completion; returns the result and any tool calls it made."""
-    headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
+    headers = residency.headers(node)
     body: dict[str, Any] = {
         "model": model,
         "messages": convo,
@@ -458,7 +458,7 @@ async def list_models(node: Node) -> list[str]:
             return [m.id for m in page.data]
         finally:
             await claude.close()
-    headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
+    headers = residency.headers(node)
     async with httpx.AsyncClient(timeout=5) as client:
         r = await client.get(f"{node.base_url.rstrip('/')}/models", headers=headers)
         r.raise_for_status()
@@ -496,7 +496,7 @@ async def check_node_health(node: Node, wanted: list[str]) -> Health:
     /v1/models answers."""
     if node.provider == "anthropic":
         return Health(await list_models(node))
-    headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
+    headers = residency.headers(node)
     base = node.base_url.rstrip("/")
     u = urlsplit(base)
     root = f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else ""

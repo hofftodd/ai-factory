@@ -251,6 +251,9 @@ class TaskRun(SQLModel, table=True):
     model: str = ""
     # How to kill it: "docker:<container name>" or "local:<pgid>".
     handle: str = ""
+    # The ai-swap lease held on the model while the step runs (ai_factory.leases), so a
+    # restart can release it; "" = none.
+    lease_id: str = ""
     # Secret path component for this run's model gateway URL.
     gateway_token: str = ""
     model_requests: int = 0
@@ -389,6 +392,7 @@ class PlannerJob(SQLModel, table=True):
     payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     node_id: int | None = None
     model: str = ""
+    lease_id: str = ""  # the ai-swap lease held while it runs; see TaskRun.lease_id
     error: str = ""
     input_tokens: int = 0
     output_tokens: int = 0

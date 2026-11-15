@@ -5,6 +5,7 @@ description = "Local agent coding orchestrator: spec-driven SDLC with autonomous
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ai-common @ git+https://github.com/hofftodd/ai-common.git",
     "anthropic>=1.13.0",
     "fastapi>=0.143.0",
     "httpx>=0.28.1",

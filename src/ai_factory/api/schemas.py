@@ -113,7 +113,8 @@ class NodeImport(BaseModel):
     """An ai-swap endpoint to import nodes from, e.g. http://studio.local:8080."""
 
     base_url: str = Field(min_length=1)
-    # Sent to ai-swap; empty = AI_SWAP_API_KEY from the environment, if set.
+    # Sent to ai-swap and kept on the imported nodes; empty = AI_FACTORY_SWAP_API_KEY (or
+    # AI_SWAP_API_KEY) from the environment, if set, which the nodes then use without storing.
     api_key: str = ""
 
 

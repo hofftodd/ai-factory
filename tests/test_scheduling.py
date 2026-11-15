@@ -597,3 +597,15 @@ def test_import_needs_an_ai_swap_endpoint(client, llm):
     assert r.status_code == 400
     r = client.post("/api/nodes/import", json={"base_url": "http://127.0.0.1:9"})
     assert r.status_code == 502
+
+
+async def test_import_and_health_checks_send_the_swap_key(client, llm, monkeypatch):
+    monkeypatch.setenv("AI_FACTORY_SWAP_API_KEY", "global")
+    swap_endpoint(llm, flint="ready")
+    r = client.post("/api/nodes/import", json={"base_url": llm.url})
+    assert r.status_code == 200, r.text
+    (made,) = r.json()["created"]
+    assert node(made["id"]).api_key == ""  # the global key isn't copied into the database
+    await check_nodes()
+    assert node(made["id"]).healthy is True
+    assert llm.headers and {h.get("Authorization") for h in llm.headers} == {"Bearer global"}

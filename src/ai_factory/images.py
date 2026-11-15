@@ -29,7 +29,7 @@ from pathlib import Path
 
 from ai_factory.config import get_settings
 from ai_factory.engine import docker, docker_access_problem, docker_env
-from ai_factory.sandbox import Proc, kill_handle
+from ai_factory.sandbox import kill_handle, local_proc
 
 DOCKERFILE = ".ai-factory/Dockerfile"
 BUILD_TIMEOUT_S = 1800
@@ -177,7 +177,7 @@ async def _build(
         env=docker_env(),
         start_new_session=True,  # own process group, so Stop kills the whole build
     )
-    build = Proc(f"local:{proc.pid}", proc)
+    build = local_proc(proc)
     if on_handle:
         on_handle(build.handle)
     tail: list[str] = []
