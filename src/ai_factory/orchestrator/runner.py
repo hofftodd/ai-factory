@@ -897,7 +897,13 @@ class TaskRunner:
                     s.exec(select(Project)).all(), {n.id: n for n in s.exec(select(Node))}
                 )
             pick, blocked = choose_node(
-                options, nodes, node_load(), residency.in_use(), project, wanted=wanted
+                options,
+                nodes,
+                node_load(),
+                residency.in_use(),
+                project,
+                wanted=wanted,
+                active=residency.machines_in_use(),
             )
             if pick is not None:
                 node_id, model = pick

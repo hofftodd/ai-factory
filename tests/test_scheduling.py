@@ -505,3 +505,49 @@ async def test_check_button_reports_failed_swap_model(client, llm):
     n = add_node(client, name="flint@studio", base_url=llm.url)
     r = client.post(f"/api/nodes/{n['id']}/check").json()
     assert r["healthy"] is False and "flint@studio failed to load" in r["error"]
+
+
+# -- spreading parallel steps over machines ------------------------------------------------
+
+
+async def test_warm_choice_prefers_a_machine_with_nothing_running(client, origin):
+    from ai_factory.orchestrator.main import choose_node
+
+    a = add_node(client, name="a", base_url="http://a.test:8080/v1", capacity=2)
+    b = add_node(client, name="b", base_url="http://b.test:8080/v1", capacity=2)
+    p = make_project(client, origin)
+    nodes = {n["id"]: node(n["id"]) for n in (a, b)}
+    options = [(a["id"], "m"), (b["id"], "m")]
+    prj = project(p["id"])
+    # Nothing running: the first choice.
+    assert choose_node(options, nodes, {}, {}, prj)[0] == (a["id"], "m")
+    # a's machine is busy: b's idle machine, though a still has a free slot.
+    assert choose_node(options, nodes, {a["id"]: 1}, {}, prj, active={"a.test"})[0] == (
+        b["id"],
+        "m",
+    )
+    # Both busy: back to the first choice.
+    both = {"a.test", "b.test"}
+    assert choose_node(options, nodes, {}, {}, prj, active=both)[0] == (a["id"], "m")
+
+
+async def test_parallel_tasks_spread_over_machines(client, origin):
+    a = add_node(client, name="a", base_url="http://a.test:8080/v1", capacity=2)
+    b = add_node(client, name="b", base_url="http://b.test:8080/v1", capacity=2)
+    p = make_project(
+        client,
+        origin,
+        executor_kind="opencode",
+        max_parallel_tasks=2,
+        role_bindings={
+            "executor": {
+                "node_id": a["id"],
+                "model": "m",
+                "also": [{"node_id": b["id"], "model": "m"}],
+            }
+        },
+    )
+    make_task(client, p["id"], script="")
+    make_task(client, p["id"], script="")
+    picked = [nid for _, nid, _ in pick_ready()]
+    assert picked == [a["id"], b["id"]]

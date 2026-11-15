@@ -262,6 +262,26 @@ def node_model(n: Node, bound: list[str], cluster: Iterable[str]) -> str:
     return named_model(n, cluster) or (n.models[0] if n.models else "")
 
 
+def machine_of(node: Node | None, model: str) -> str:
+    """The computer (node, model) runs on: its ai-swap machine, else the endpoint's host."""
+    p = placement(node, model)
+    if p is not None:
+        return p.machine.name
+    if node is None:
+        return ""
+    return urlsplit(node.base_url).hostname or node.base_url or node.name
+
+
+def machines_in_use() -> set[str]:
+    """Machines with a running task step or planner call."""
+    with session() as s:
+        runs = s.exec(select(TaskRun).where(TaskRun.state == RunState.RUNNING)).all()
+        jobs = s.exec(select(PlannerJob).where(PlannerJob.state == JobState.RUNNING)).all()
+        nodes = {n.id: n for n in s.exec(select(Node))}
+    work = [(r.node_id, r.model) for r in runs] + [(j.node_id, j.model) for j in jobs]
+    return {machine_of(nodes[nid], m) for nid, m in work if nid is not None and nid in nodes}
+
+
 # -- the decision -----------------------------------------------------------------------
 
 
