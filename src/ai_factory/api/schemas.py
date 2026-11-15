@@ -109,6 +109,14 @@ class NodeCreate(BaseModel):
     price_out: float = Field(default=0.0, ge=0)
 
 
+class NodeImport(BaseModel):
+    """An ai-swap endpoint to import nodes from, e.g. http://studio.local:8080."""
+
+    base_url: str = Field(min_length=1)
+    # Sent to ai-swap; empty = AI_SWAP_API_KEY from the environment, if set.
+    api_key: str = ""
+
+
 class NodeUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None

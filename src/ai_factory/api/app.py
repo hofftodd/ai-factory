@@ -28,6 +28,7 @@ from ai_factory.api.schemas import (
     GitHubRepoCreate,
     GitHubTokenUpdate,
     NodeCreate,
+    NodeImport,
     NodeUpdate,
     ProjectCreate,
     ProjectUpdate,
@@ -780,6 +781,68 @@ def create_node(body: NodeCreate) -> dict[str, Any]:
         s.commit()
         s.refresh(n)
     return _node_out(n)
+
+
+@router.post("/api/nodes/import")
+async def import_nodes(body: NodeImport) -> dict[str, Any]:
+    """One node per model an ai-swap endpoint offers (its whole cluster), pinned to its
+    machine ("flint@studio"), with the context length ai-swap configures, capacity 1 and
+    no price. Models that already have a node of that name on this endpoint are skipped."""
+    u = urlsplit(body.base_url.strip().rstrip("/"))
+    if not u.scheme or not u.netloc:
+        raise HTTPException(400, "base_url must look like http://host:port")
+    root = f"{u.scheme}://{u.netloc}"
+    key = body.api_key or os.environ.get("AI_SWAP_API_KEY", "")
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+            st, md = await asyncio.gather(
+                client.get(root + "/api/status"), client.get(root + "/v1/models")
+            )
+        status, listed = st.json(), md.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(502, f"cannot read {root}: {e}") from e
+    if st.status_code in (401, 403) or md.status_code in (401, 403):
+        raise HTTPException(502, f"{root} refused the API key (set AI_SWAP_API_KEY)")
+    if st.status_code != 200 or not isinstance(status, dict) or "node" not in status:
+        raise HTTPException(400, f"{root} is not an ai-swap endpoint (no /api/status)")
+    if md.status_code != 200 or not isinstance(listed, dict):
+        raise HTTPException(502, f"{root}/v1/models answered {md.status_code}")
+    ctx: dict[tuple[str, str], int] = {}
+    for n in [status.get("node") or {}] + [p.get("node") or {} for p in status.get("peers") or []]:
+        for m in n.get("models") or []:
+            if n.get("name") and m.get("name") and m.get("ctx"):
+                ctx[(n["name"], m["name"])] = int(m["ctx"])
+    with session() as s:
+        existing = {n.name for n in s.exec(select(Node)) if residency.root(n) == root}
+    created, skipped = [], []
+    for entry in listed.get("data") or []:
+        mid, machine = entry.get("id"), entry.get("node")
+        if not mid or not machine:
+            continue
+        name = str(mid).split("@", 1)[0]
+        pinned = f"{name}@{machine}"
+        if pinned in existing:
+            skipped.append(pinned)
+            continue
+        window = int(entry.get("context_length") or ctx.get((machine, name)) or 32768)
+        node = Node(
+            name=pinned,
+            base_url=root + "/v1",
+            context_window=max(1024, window),
+            api_key=key,
+            capacity=1,
+            models=[pinned],
+            price_in=0.0,
+            price_out=0.0,
+        )
+        with session() as s:
+            s.add(node)
+            s.commit()
+            s.refresh(node)
+        existing.add(pinned)
+        created.append(_node_out(node))
+    return {"created": created, "skipped": skipped}
 
 
 @router.patch("/api/nodes/{node_id}")

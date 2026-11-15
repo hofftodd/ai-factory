@@ -551,3 +551,49 @@ async def test_parallel_tasks_spread_over_machines(client, origin):
     make_task(client, p["id"], script="")
     picked = [nid for _, nid, _ in pick_ready()]
     assert picked == [a["id"], b["id"]]
+
+
+# -- importing nodes from ai-swap ------------------------------------------------------------
+
+
+async def test_import_nodes_from_ai_swap(client, llm):
+    llm.swap_status = {
+        "node": {"name": "studio", "models": [{"name": "flint", "ctx": 131072}]},
+        "peers": [
+            {"online": True, "node": {"name": "mini", "models": [{"name": "flint", "ctx": 0}]}}
+        ],
+    }
+    llm.swap_models = [
+        {"id": "flint", "node": "studio", "status": "ready"},
+        {"id": "flint@mini", "node": "mini", "status": "stopped", "context_length": 65536},
+        {"id": "gemma", "node": "mini", "status": "stopped"},
+    ]
+    root = llm.url.removesuffix("/v1")
+    r = client.post("/api/nodes/import", json={"base_url": root})
+    assert r.status_code == 200, r.text
+    created = {n["name"]: n for n in r.json()["created"]}
+    assert set(created) == {"flint@studio", "flint@mini", "gemma@mini"}
+    assert created["flint@studio"]["context_window"] == 131072  # from /api/status
+    assert created["flint@mini"]["context_window"] == 65536  # from /v1/models
+    assert created["gemma@mini"]["context_window"] == 32768  # neither says
+    for n in created.values():
+        assert n["base_url"] == root + "/v1" and n["models"] == [n["name"]]
+        assert n["capacity"] == 1 and n["price_in"] == 0 and n["price_out"] == 0
+
+    # Again: nothing new.
+    again = client.post("/api/nodes/import", json={"base_url": llm.url}).json()
+    assert again["created"] == [] and sorted(again["skipped"]) == sorted(created)
+    assert len(client.get("/api/nodes").json()) == 3
+
+    # Imported nodes are checked per model.
+    await check_nodes()
+    assert all(node(n["id"]).healthy for n in created.values())
+
+
+def test_import_needs_an_ai_swap_endpoint(client, llm):
+    r = client.post("/api/nodes/import", json={"base_url": llm.url})  # plain OpenAI server
+    assert r.status_code == 400 and "not an ai-swap endpoint" in r.json()["detail"]
+    r = client.post("/api/nodes/import", json={"base_url": "nonsense"})
+    assert r.status_code == 400
+    r = client.post("/api/nodes/import", json={"base_url": "http://127.0.0.1:9"})
+    assert r.status_code == 502

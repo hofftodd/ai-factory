@@ -37,7 +37,7 @@ export default function NodesPage() {
             <div className="row">
               <h3>{n.name}</h3>
               <span className={`dot ${n.healthy ? "ok" : n.healthy === false ? "bad" : ""}`}>
-                {n.healthy == null ? "unchecked" : n.healthy ? "healthy" : "unreachable"}
+                {n.healthy == null ? "unchecked" : n.healthy ? "healthy" : "unhealthy"}
               </span>
             </div>
             <div className="mono small">{n.base_url}</div>
@@ -72,6 +72,7 @@ export default function NodesPage() {
           </div>
         ))}
       </div>
+      <ImportFromSwap onImported={reload} />
       <form
         className="card form"
         onSubmit={async (e) => {
@@ -133,6 +134,61 @@ export default function NodesPage() {
         <ErrorNote error={formError} />
         <button className="btn primary">Add node</button>
       </form>
+    </div>
+  );
+}
+
+interface ImportResult {
+  created: Node[];
+  skipped: string[];
+}
+
+/** One node per model from an ai-swap endpoint (POST /api/nodes/import). */
+function ImportFromSwap({ onImported }: { onImported: () => void }) {
+  const [url, setUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [error, setError] = useState("");
+  const [done, setDone] = useState("");
+  return (
+    <div className="card form">
+      <h2>Import from ai-swap</h2>
+      <p className="small muted">
+        Adds a node per model in the ai-swap cluster, pinned to its machine (e.g. flint@studio), with ai-swap's
+        context length, capacity 1 and no price. Models that already have a node are skipped.
+      </p>
+      <div className="grid2">
+        <Field label="ai-swap URL">
+          <input className="mono" value={url} placeholder="http://studio.local:8080" onChange={(e) => setUrl(e.target.value)} />
+        </Field>
+        <Field label="API key" hint="Optional; default AI_SWAP_API_KEY from ai-factory's environment">
+          <input type="password" value={key} onChange={(e) => setKey(e.target.value)} />
+        </Field>
+      </div>
+      <ErrorNote error={error} />
+      {done && <div className="small">{done}</div>}
+      <div className="actions">
+        <ActionButton
+          kind="primary"
+          disabled={!url.trim()}
+          onClick={async () => {
+            setError("");
+            setDone("");
+            try {
+              const r = await post<ImportResult>("/api/nodes/import", { base_url: url.trim(), api_key: key });
+              await Promise.all(r.created.map((n) => post(`/api/nodes/${n.id}/check`)));
+              setDone(
+                `Added ${r.created.length} node${r.created.length === 1 ? "" : "s"}` +
+                  (r.skipped.length ? `; skipped ${r.skipped.join(", ")} (already there)` : ""),
+              );
+              onImported();
+            } catch (err) {
+              setError((err as Error).message);
+            }
+          }}
+        >
+          Import nodes
+        </ActionButton>
+      </div>
     </div>
   );
 }
