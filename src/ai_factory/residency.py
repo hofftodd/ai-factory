@@ -126,7 +126,11 @@ def _parse(status: dict[str, Any], models: dict[str, Any]) -> View:
     for e in models.get("data") or []:
         mid, machine = e.get("id"), e.get("node")
         if mid and machine:
-            ids[mid] = (machine, mid.split("@", 1)[0])
+            name = mid.split("@", 1)[0]
+            ids[mid] = (machine, name)
+            # ai-swap lists a model bare unless two machines have one of that name (the
+            # endpoint's own models always are), but pinned ids work too: "flint@studio".
+            ids.setdefault(f"{name}@{machine}", (machine, name))
     return View(machines, ids, time.monotonic())
 
 
@@ -216,6 +220,66 @@ def in_use() -> dict[tuple[str, str], str]:
             who = f"{projects.get(j.project_id, j.project_id)}'s planner"
             out.setdefault((p.machine.name, p.model.name), who)
     return out
+
+
+# -- which model a node is for ------------------------------------------------------------
+
+
+def bound_by_node(projects: Iterable[Project]) -> dict[int, list[str]]:
+    """Node id -> the models projects' role bindings use on it (fallbacks included), one
+    entry per binding."""
+    bound: dict[int, list[str]] = {}
+    for p in projects:
+        for b in (p.role_bindings or {}).values():
+            if not isinstance(b, dict):
+                continue
+            for c in (b, *(b.get("also") or [])):
+                if isinstance(c, dict) and c.get("node_id") and c.get("model"):
+                    bound.setdefault(int(c["node_id"]), []).append(str(c["model"]))
+    return bound
+
+
+def named_model(n: Node, ids: Iterable[str]) -> str:
+    """The model named like the node ("thinkingcap" -> "thinkingcap-qwen3.8-27b", or
+    "flint@studio" for a node imported from ai-swap), else ""."""
+    name = n.name.lower()
+    for group in (list(ids), n.models):
+        exact = [m for m in group if m.lower() == name]
+        prefixed = sorted(
+            (m for m in group if m.lower().startswith(name) and "@" not in m), key=len
+        )
+        if exact or prefixed:
+            return (exact or prefixed)[0]
+    return ""
+
+
+def node_model(n: Node, bound: list[str], cluster: Iterable[str]) -> str:
+    """The model a node stands for: the one projects bind to it most, else the cluster model
+    named like the node, else its first model. (The node health check fills ``models``
+    with everything the endpoint serves.)"""
+    if bound:
+        return max(set(bound), key=bound.count)
+    return named_model(n, cluster) or (n.models[0] if n.models else "")
+
+
+def machine_of(node: Node | None, model: str) -> str:
+    """The computer (node, model) runs on: its ai-swap machine, else the endpoint's host."""
+    p = placement(node, model)
+    if p is not None:
+        return p.machine.name
+    if node is None:
+        return ""
+    return urlsplit(node.base_url).hostname or node.base_url or node.name
+
+
+def machines_in_use() -> set[str]:
+    """Machines with a running task step or planner call."""
+    with session() as s:
+        runs = s.exec(select(TaskRun).where(TaskRun.state == RunState.RUNNING)).all()
+        jobs = s.exec(select(PlannerJob).where(PlannerJob.state == JobState.RUNNING)).all()
+        nodes = {n.id: n for n in s.exec(select(Node))}
+    work = [(r.node_id, r.model) for r in runs] + [(j.node_id, j.model) for j in jobs]
+    return {machine_of(nodes[nid], m) for nid, m in work if nid is not None and nid in nodes}
 
 
 # -- the decision -----------------------------------------------------------------------

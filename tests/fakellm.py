@@ -99,6 +99,10 @@ class FakeLLM:
         self.tool_script: list[tuple[str, dict[str, Any]]] = []
         # A planner (not a coding agent) answers with `planner` after its tool calls.
         self.planner_after_tools = False
+        # Set to act as an ai-swap endpoint: its /api/status body, and the /v1/models
+        # entries (with "node", "status", "context_length") in place of the default.
+        self.swap_status: dict[str, Any] | None = None
+        self.swap_models: list[dict[str, Any]] = []
         self.disconnected = threading.Event()
         outer = self
 
@@ -135,7 +139,12 @@ class FakeLLM:
 
             def do_GET(self) -> None:  # noqa: N802
                 outer.headers.append(dict(self.headers.items()))
-                if self.path.split("?", 1)[0].rstrip("/").endswith("/models"):
+                path = self.path.split("?", 1)[0].rstrip("/")
+                if path == "/api/status" and outer.swap_status is not None:
+                    self._json(200, outer.swap_status)
+                elif path.endswith("/models") and outer.swap_status is not None:
+                    self._json(200, {"object": "list", "data": outer.swap_models})
+                elif path.endswith("/models"):
                     ids = [MODEL]
                     if self.headers.get("anthropic-version"):  # asked as the Claude API
                         ids = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]

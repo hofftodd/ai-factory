@@ -28,6 +28,7 @@ from ai_factory.api.schemas import (
     GitHubRepoCreate,
     GitHubTokenUpdate,
     NodeCreate,
+    NodeImport,
     NodeUpdate,
     ProjectCreate,
     ProjectUpdate,
@@ -77,7 +78,7 @@ from ai_factory.core.state import (
 from ai_factory.db import control_session, session
 from ai_factory.executors import EXECUTORS
 from ai_factory.executors.shell import role_scripts
-from ai_factory.llm import list_models
+from ai_factory.llm import check_node_health
 from ai_factory.orchestrator.gate_actions import send_back_to_tester
 
 
@@ -709,21 +710,6 @@ async def residency_conflicts(body: dict[str, Any]) -> dict[str, list[str]]:
     return {"warnings": await residency.binding_conflicts(bindings)}
 
 
-def _node_model(n: Node, bound: list[str], cluster: dict[str, Any]) -> str:
-    """The model a node stands for: the one projects bind to it most, else the cluster model
-    named like the node ("thinkingcap" -> "thinkingcap-qwen3.8-27b"), else its first model.
-    (The node health check fills ``models`` with everything the endpoint serves.)"""
-    if bound:
-        return max(set(bound), key=bound.count)
-    name = n.name.lower()
-    for ids in (list(cluster), n.models):
-        exact = [m for m in ids if m.lower() == name]
-        prefixed = sorted((m for m in ids if m.lower().startswith(name) and "@" not in m), key=len)
-        if exact or prefixed:
-            return (exact or prefixed)[0]
-    return n.models[0] if n.models else ""
-
-
 @router.get("/api/machines")
 async def list_machines() -> list[dict[str, Any]]:
     """The computers behind the nodes. For an ai-swap endpoint, every machine in its cluster,
@@ -734,14 +720,7 @@ async def list_machines() -> list[dict[str, Any]]:
         projects = list(s.exec(select(Project)))
     load = await run_in_threadpool(_node_load)
     # A node is an endpoint; the model it's used for is what projects bind to it.
-    bound: dict[int, list[str]] = {}
-    for p in projects:
-        for b in (p.role_bindings or {}).values():
-            if not isinstance(b, dict):
-                continue
-            for c in (b, *(b.get("also") or [])):
-                if isinstance(c, dict) and c.get("node_id") and c.get("model"):
-                    bound.setdefault(int(c["node_id"]), []).append(str(c["model"]))
+    bound = residency.bound_by_node(projects)
     endpoints: dict[str, Node] = {}
     for n in nodes:
         endpoints.setdefault(residency.root(n), n)
@@ -772,7 +751,7 @@ async def list_machines() -> list[dict[str, Any]]:
             )
     for n in nodes:
         v = views.get(residency.root(n))
-        model = _node_model(n, bound.get(n.id or 0, []), v.ids if v else {})
+        model = residency.node_model(n, bound.get(n.id or 0, []), v.ids if v else {})
         state = ""
         if v is not None and model in v.ids:
             where, name = v.ids[model]
@@ -804,6 +783,68 @@ def create_node(body: NodeCreate) -> dict[str, Any]:
     return _node_out(n)
 
 
+@router.post("/api/nodes/import")
+async def import_nodes(body: NodeImport) -> dict[str, Any]:
+    """One node per model an ai-swap endpoint offers (its whole cluster), pinned to its
+    machine ("flint@studio"), with the context length ai-swap configures, capacity 1 and
+    no price. Models that already have a node of that name on this endpoint are skipped."""
+    u = urlsplit(body.base_url.strip().rstrip("/"))
+    if not u.scheme or not u.netloc:
+        raise HTTPException(400, "base_url must look like http://host:port")
+    root = f"{u.scheme}://{u.netloc}"
+    key = body.api_key or os.environ.get("AI_SWAP_API_KEY", "")
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+            st, md = await asyncio.gather(
+                client.get(root + "/api/status"), client.get(root + "/v1/models")
+            )
+        status, listed = st.json(), md.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(502, f"cannot read {root}: {e}") from e
+    if st.status_code in (401, 403) or md.status_code in (401, 403):
+        raise HTTPException(502, f"{root} refused the API key (set AI_SWAP_API_KEY)")
+    if st.status_code != 200 or not isinstance(status, dict) or "node" not in status:
+        raise HTTPException(400, f"{root} is not an ai-swap endpoint (no /api/status)")
+    if md.status_code != 200 or not isinstance(listed, dict):
+        raise HTTPException(502, f"{root}/v1/models answered {md.status_code}")
+    ctx: dict[tuple[str, str], int] = {}
+    for n in [status.get("node") or {}] + [p.get("node") or {} for p in status.get("peers") or []]:
+        for m in n.get("models") or []:
+            if n.get("name") and m.get("name") and m.get("ctx"):
+                ctx[(n["name"], m["name"])] = int(m["ctx"])
+    with session() as s:
+        existing = {n.name for n in s.exec(select(Node)) if residency.root(n) == root}
+    created, skipped = [], []
+    for entry in listed.get("data") or []:
+        mid, machine = entry.get("id"), entry.get("node")
+        if not mid or not machine:
+            continue
+        name = str(mid).split("@", 1)[0]
+        pinned = f"{name}@{machine}"
+        if pinned in existing:
+            skipped.append(pinned)
+            continue
+        window = int(entry.get("context_length") or ctx.get((machine, name)) or 32768)
+        node = Node(
+            name=pinned,
+            base_url=root + "/v1",
+            context_window=max(1024, window),
+            api_key=key,
+            capacity=1,
+            models=[pinned],
+            price_in=0.0,
+            price_out=0.0,
+        )
+        with session() as s:
+            s.add(node)
+            s.commit()
+            s.refresh(node)
+        existing.add(pinned)
+        created.append(_node_out(node))
+    return {"created": created, "skipped": skipped}
+
+
 @router.patch("/api/nodes/{node_id}")
 def update_node(node_id: int, body: NodeUpdate) -> dict[str, Any]:
     with session() as s:
@@ -832,9 +873,11 @@ def delete_node(node_id: int) -> None:
 async def check_node(node_id: int) -> dict[str, Any]:
     n = _get(Node, node_id)
     healthy, models, error = False, list(n.models), ""
+    with session() as s:
+        wanted = residency.bound_by_node(s.exec(select(Project)).all()).get(node_id, [])
     try:
-        found = await list_models(n)
-        healthy, models = True, found or models
+        health = await check_node_health(n, sorted(set(wanted)))
+        healthy, models, error = not health.problem, health.models or models, health.problem
     except Exception as e:  # noqa: BLE001 - report any failure to the UI
         error = str(e) or type(e).__name__
     with session() as s:

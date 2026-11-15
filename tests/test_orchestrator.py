@@ -181,8 +181,8 @@ async def test_retry_keeps_partial_work_and_passes_failure_reason(client, origin
     assert task(t["id"]).attempts == 2
 
 
-async def test_recover_marks_orphaned_runs_failed(client, origin):
-    """V9.1: after a crash nothing stays 'running'."""
+async def test_recover_requeues_interrupted_runs(client, origin):
+    """V9.1: after a crash nothing stays 'running'; the task runs again."""
     from ai_factory.core.models import Task
     from ai_factory.core.state import transition
 
@@ -190,13 +190,32 @@ async def test_recover_marks_orphaned_runs_failed(client, origin):
     t = make_task(client, p["id"], script="true")
     transition(t["id"], (TaskState.QUEUED,), TaskState.RUNNING)
     with session() as s:
+        row = s.get(Task, t["id"])
+        row.attempts = 1
+        s.add(row)
         s.add(TaskRun(task_id=t["id"], project_id=p["id"]))
         s.commit()
     recover()
     with session() as s:
-        assert s.get(Task, t["id"]).state == TaskState.FAILED
+        row = s.get(Task, t["id"])
+        # Requeued without a manual retry, and the cut-off attempt doesn't count.
+        assert row.state == TaskState.QUEUED
+        assert row.attempts == 0 and row.level_failures == 0
     (run,) = _runs(t["id"])
     assert run.state == RunState.INTERRUPTED
+    assert run.failure_kind == "interrupted"
+
+
+async def test_recover_requeues_orphaned_task_without_a_run(client, origin):
+    from ai_factory.core.models import Task
+    from ai_factory.core.state import transition
+
+    p = make_project(client, origin)
+    t = make_task(client, p["id"], script="true")
+    transition(t["id"], (TaskState.QUEUED,), TaskState.RUNNING)
+    recover()
+    with session() as s:
+        assert s.get(Task, t["id"]).state == TaskState.QUEUED
 
 
 def test_agent_commands_source_the_services_script(tmp_path):

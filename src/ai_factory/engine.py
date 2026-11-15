@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -64,6 +65,23 @@ def docker_env(base: dict[str, str] | None = None) -> dict[str, str]:
     if host:
         env["DOCKER_HOST"] = host
     return env
+
+
+# The docker CLI's words when the daemon's socket refuses this user.
+_DENIED = re.compile(r"permission denied.*(docker\.sock|docker daemon|/var/run/docker)", re.I)
+
+
+def docker_access_problem(output: str) -> str:
+    """A message for the user when docker output says the socket refused this user, else
+    "". That is the host's setup, not the project's: no agent can fix it."""
+    if not _DENIED.search(output or ""):
+        return ""
+    user = os.environ.get("USER") or "the ai-factory user"
+    return (
+        "ai-factory cannot use the Docker socket (permission denied). Add the user that "
+        f"runs ai-factory to the docker group (`sudo usermod -aG docker {user}`), then "
+        "restart the ai-factory service; `ai-factory doctor` checks this."
+    )
 
 
 def docker(*args: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:

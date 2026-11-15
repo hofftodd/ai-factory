@@ -5,6 +5,7 @@ Docker builds and checks are faked here (tests/test_docker.py builds a real one)
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -223,3 +224,54 @@ def test_environment_agent_is_told_how_tests_run():
     assert "## How this project's tests run" not in environment.system_prompt(
         Project(name="p", repo_url="x"), {}, [], {}, ""
     )
+
+
+DENIED = (
+    "permission denied while trying to connect to the Docker daemon socket at "
+    'unix:///var/run/docker.sock: Head "http://%2Fvar%2Frun%2Fdocker.sock/_ping"'
+)
+
+
+async def test_docker_permission_problem_goes_to_the_user_not_the_agent(
+    client, origin, llm, docker, monkeypatch
+):
+    async def denied(project_id: int, workspace: Path, **_: Any) -> str:
+        raise images.DockerAccessError(environment.docker_access_problem(DENIED), DENIED)
+
+    monkeypatch.setattr(images, "ensure_image", denied)
+    p = spec_project(client, origin, llm)
+    pid = p["id"]
+    orch = Orchestrator()
+    await approved(client, orch, pid)
+    client.post(f"/api/projects/{pid}/plan/approve")
+    await drive(orch, lambda: job_states(pid)[-1] == JobState.FAILED)
+    assert len(env_requests(llm)) == 1  # never asked to "fix" the host's Docker setup
+    with session() as s:
+        events = [e.message for e in s.exec(select(Event).where(Event.project_id == pid))]
+    assert any("cannot use the Docker socket" in m and "usermod -aG docker" in m for m in events)
+    assert project(pid).phase == ProjectPhase.ENVIRONMENT
+
+
+async def test_image_build_and_check_spot_docker_permission_problems(tmp_path, monkeypatch):
+    """The real build and check paths, with a `docker` that the socket refuses."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "docker"
+    fake.write_text(f"#!/bin/sh\necho '{DENIED}' >&2\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    ctx = tmp_path / "ctx"
+    (ctx / ".ai-factory").mkdir(parents=True)
+    (ctx / ".ai-factory" / "Dockerfile").write_text("FROM scratch\n")
+    with pytest.raises(images.DockerAccessError, match="usermod -aG docker"):
+        await images._build("t:1", ctx / ".ai-factory", None, None)
+    with pytest.raises(images.DockerAccessError):
+        await environment.run_check("t:1", ctx / ".ai-factory", lambda h: None)
+
+
+def test_docker_access_problem_only_for_the_socket():
+    from ai_factory.engine import docker_access_problem
+
+    assert "docker group" in docker_access_problem(DENIED)
+    assert docker_access_problem("cp: /w/x: Permission denied") == ""
+    assert docker_access_problem("") == ""

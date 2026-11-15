@@ -457,3 +457,143 @@ def test_tasks_in_one_requirement_area_do_not_run_together(client, origin):
         s.commit()
     assert a not in [t.id for t, _, _ in pick_ready()]
     assert all("FR-2.2" not in t.req_refs for t, _, _ in pick_ready())
+
+
+def swap_endpoint(llm: FakeLLM, **models: str) -> None:
+    """Make the fake an ai-swap endpoint on machine "studio" serving models name=status."""
+    llm.swap_status = {"node": {"name": "studio", "models": []}, "peers": []}
+    llm.swap_models = [
+        {"id": m, "node": "studio", "status": st, "context_length": 65536}
+        for m, st in models.items()
+    ]
+
+
+async def test_ai_swap_health_is_per_model(client, origin, llm):
+    swap_endpoint(llm, flint="stopped", quartz="failed")
+    flint = add_node(client, name="flint@studio", base_url=llm.url)
+    quartz = add_node(client, name="quartz@studio", base_url=llm.url)
+    gone = add_node(client, name="other", base_url=llm.url)
+    make_project(
+        client,
+        origin,
+        executor_kind="opencode",
+        role_bindings={"executor": {"node_id": gone["id"], "model": "missing"}},
+    )
+    await check_nodes()
+    assert node(flint["id"]).healthy is True  # stopped = merely unloaded
+    assert node(quartz["id"]).healthy is False  # failed
+    assert node(gone["id"]).healthy is False  # bound model not offered (not runnable)
+
+    swap_endpoint(llm, flint="failed", quartz="ready")
+    await check_nodes()
+    assert node(flint["id"]).healthy is False
+    assert node(quartz["id"]).healthy is True
+    assert events("node flint@studio is unhealthy: flint@studio failed to load on studio")
+    assert events("node quartz@studio is back")
+
+
+async def test_plain_openai_node_health_unchanged(client, llm):
+    n = add_node(client, name="flint@studio", base_url=llm.url)  # no /api/status
+    await check_nodes()
+    assert node(n["id"]).healthy is True
+    r = client.post(f"/api/nodes/{n['id']}/check").json()
+    assert r["healthy"] is True and r["error"] == ""
+
+
+async def test_check_button_reports_failed_swap_model(client, llm):
+    swap_endpoint(llm, flint="failed")
+    n = add_node(client, name="flint@studio", base_url=llm.url)
+    r = client.post(f"/api/nodes/{n['id']}/check").json()
+    assert r["healthy"] is False and "flint@studio failed to load" in r["error"]
+
+
+# -- spreading parallel steps over machines ------------------------------------------------
+
+
+async def test_warm_choice_prefers_a_machine_with_nothing_running(client, origin):
+    from ai_factory.orchestrator.main import choose_node
+
+    a = add_node(client, name="a", base_url="http://a.test:8080/v1", capacity=2)
+    b = add_node(client, name="b", base_url="http://b.test:8080/v1", capacity=2)
+    p = make_project(client, origin)
+    nodes = {n["id"]: node(n["id"]) for n in (a, b)}
+    options = [(a["id"], "m"), (b["id"], "m")]
+    prj = project(p["id"])
+    # Nothing running: the first choice.
+    assert choose_node(options, nodes, {}, {}, prj)[0] == (a["id"], "m")
+    # a's machine is busy: b's idle machine, though a still has a free slot.
+    assert choose_node(options, nodes, {a["id"]: 1}, {}, prj, active={"a.test"})[0] == (
+        b["id"],
+        "m",
+    )
+    # Both busy: back to the first choice.
+    both = {"a.test", "b.test"}
+    assert choose_node(options, nodes, {}, {}, prj, active=both)[0] == (a["id"], "m")
+
+
+async def test_parallel_tasks_spread_over_machines(client, origin):
+    a = add_node(client, name="a", base_url="http://a.test:8080/v1", capacity=2)
+    b = add_node(client, name="b", base_url="http://b.test:8080/v1", capacity=2)
+    p = make_project(
+        client,
+        origin,
+        executor_kind="opencode",
+        max_parallel_tasks=2,
+        role_bindings={
+            "executor": {
+                "node_id": a["id"],
+                "model": "m",
+                "also": [{"node_id": b["id"], "model": "m"}],
+            }
+        },
+    )
+    make_task(client, p["id"], script="")
+    make_task(client, p["id"], script="")
+    picked = [nid for _, nid, _ in pick_ready()]
+    assert picked == [a["id"], b["id"]]
+
+
+# -- importing nodes from ai-swap ------------------------------------------------------------
+
+
+async def test_import_nodes_from_ai_swap(client, llm):
+    llm.swap_status = {
+        "node": {"name": "studio", "models": [{"name": "flint", "ctx": 131072}]},
+        "peers": [
+            {"online": True, "node": {"name": "mini", "models": [{"name": "flint", "ctx": 0}]}}
+        ],
+    }
+    llm.swap_models = [
+        {"id": "flint", "node": "studio", "status": "ready"},
+        {"id": "flint@mini", "node": "mini", "status": "stopped", "context_length": 65536},
+        {"id": "gemma", "node": "mini", "status": "stopped"},
+    ]
+    root = llm.url.removesuffix("/v1")
+    r = client.post("/api/nodes/import", json={"base_url": root})
+    assert r.status_code == 200, r.text
+    created = {n["name"]: n for n in r.json()["created"]}
+    assert set(created) == {"flint@studio", "flint@mini", "gemma@mini"}
+    assert created["flint@studio"]["context_window"] == 131072  # from /api/status
+    assert created["flint@mini"]["context_window"] == 65536  # from /v1/models
+    assert created["gemma@mini"]["context_window"] == 32768  # neither says
+    for n in created.values():
+        assert n["base_url"] == root + "/v1" and n["models"] == [n["name"]]
+        assert n["capacity"] == 1 and n["price_in"] == 0 and n["price_out"] == 0
+
+    # Again: nothing new.
+    again = client.post("/api/nodes/import", json={"base_url": llm.url}).json()
+    assert again["created"] == [] and sorted(again["skipped"]) == sorted(created)
+    assert len(client.get("/api/nodes").json()) == 3
+
+    # Imported nodes are checked per model.
+    await check_nodes()
+    assert all(node(n["id"]).healthy for n in created.values())
+
+
+def test_import_needs_an_ai_swap_endpoint(client, llm):
+    r = client.post("/api/nodes/import", json={"base_url": llm.url})  # plain OpenAI server
+    assert r.status_code == 400 and "not an ai-swap endpoint" in r.json()["detail"]
+    r = client.post("/api/nodes/import", json={"base_url": "nonsense"})
+    assert r.status_code == 400
+    r = client.post("/api/nodes/import", json={"base_url": "http://127.0.0.1:9"})
+    assert r.status_code == 502

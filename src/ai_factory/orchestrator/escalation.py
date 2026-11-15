@@ -121,6 +121,12 @@ def after_failure(task_id: int, run_id: int) -> Decision | None:
             emit(project.id, task_id, "watchdog", f"escalation: retry ({d.reason})", action="retry")
             transition(task_id, (TaskState.FAILED,), TaskState.QUEUED, d.reason)
             return d
+        if run.failure_kind == "interrupted":
+            # Cut off by a restart: run it again (in the same task clone), uncounted.
+            d = Decision("retry", "interrupted by a restart; running it again")
+            emit(project.id, task_id, "watchdog", f"escalation: retry ({d.reason})", action="retry")
+            transition(task_id, (TaskState.FAILED,), TaskState.QUEUED, d.reason)
+            return d
         if run.failure_kind == "behind":
             # Not the task's fault either: other work merged first. The next attempt
             # merges it with the conflicts marked and the Builder resolves them.

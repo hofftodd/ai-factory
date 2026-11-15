@@ -53,8 +53,8 @@ from ai_factory.core.state import (
 from ai_factory.db import session
 from ai_factory.executors import get_executor
 from ai_factory.gateway import Gateway, new_token, serve
-from ai_factory.llm import list_models
-from ai_factory.orchestrator import gate_actions, milestone
+from ai_factory.llm import check_node_health
+from ai_factory.orchestrator import escalation, gate_actions, milestone
 from ai_factory.orchestrator.jobs import JobRunner, finish_job, job_role
 from ai_factory.orchestrator.runner import (
     TaskRunner,
@@ -79,13 +79,26 @@ def recover() -> None:
         if run.handle:
             kill_handle(run.handle, 2)
         finish_run(run.id, RunState.INTERRUPTED, "orchestrator restarted during run")
-        transition(
+        with session() as s:
+            row = s.get(TaskRun, run.id)
+            if row is not None:
+                row.failure_kind = "interrupted"
+                s.add(row)
+            t = s.get(Task, run.task_id)
+            if t is not None and t.state in ACTIVE_STATES:
+                # The attempt was cut off, not failed: it doesn't count.
+                t.attempts = max(0, t.attempts - 1)
+                s.add(t)
+            s.commit()
+        if transition(
             run.task_id,
             ACTIVE_STATES,
             TaskState.FAILED,
-            "orchestrator restarted during run; retry to continue",
-        )
-    # Tasks marked active without an open run (crash between transition and run insert).
+            "orchestrator restarted during run",
+        ):
+            escalation.after_failure(run.task_id, run.id)
+    # Tasks marked active without an open run (crash between transition and run insert):
+    # no attempt was counted, so they simply go back in the queue.
     with session() as s:
         orphans = s.exec(select(Task).where(col(Task.state).in_(ACTIVE_STATES))).all()
         open_runs = {
@@ -93,7 +106,7 @@ def recover() -> None:
         }
     for t in orphans:
         if t.id is not None and t.id not in open_runs:
-            transition(t.id, ACTIVE_STATES, TaskState.FAILED, "orchestrator restarted")
+            transition(t.id, ACTIVE_STATES, TaskState.QUEUED, "orchestrator restarted")
     # Planner jobs cut off mid-call.
     with session() as s:
         jobs = s.exec(select(PlannerJob).where(PlannerJob.state == JobState.RUNNING)).all()
@@ -147,16 +160,24 @@ def node_available(node: Node | None, load: dict[int, int]) -> bool:
 
 
 async def check_nodes() -> None:
-    """Refresh each node's health and model list; announce changes."""
+    """Refresh each node's health and model list; announce changes.
+
+    On an ai-swap endpoint the node is unhealthy when a model it is used for (bound by a
+    project, else named like the node) has failed or isn't offered (llm.check_node_health)."""
     with session() as s:
         nodes = s.exec(select(Node)).all()
+        bound = residency.bound_by_node(s.exec(select(Project)).all())
 
     async def one(node: Node) -> None:
+        assert node.id is not None
+        wanted = sorted(set(bound.get(node.id, [])))
         try:
-            models = await asyncio.wait_for(list_models(node), 15)
-            healthy, error = True, ""
+            health = await asyncio.wait_for(check_node_health(node, wanted), 15)
+            models, error = health.models, health.problem
+            healthy, word = not error, "unhealthy"
         except Exception as e:  # noqa: BLE001 - any failure means unreachable
-            models, healthy, error = list(node.models), False, str(e) or type(e).__name__
+            models, healthy = list(node.models), False
+            error, word = str(e) or type(e).__name__, "unreachable"
         with session() as s:
             row = s.get(Node, node.id)
             if row is None:
@@ -171,7 +192,7 @@ async def check_nodes() -> None:
                 None,
                 None,
                 "system",
-                f"node {node.name} is {'back' if healthy else 'unreachable'}"
+                f"node {node.name} is {'back' if healthy else word}"
                 + (f": {error}" if error else ""),
                 node_id=node.id,
             )
@@ -190,15 +211,19 @@ def choose_node(
     project: Project,
     planned: dict[str, set[str]] | None = None,
     wanted: AbstractSet[tuple[str, str]] = frozenset(),
+    active: AbstractSet[str] = frozenset(),
 ) -> tuple[tuple[int, str] | None, tuple[int, str, str] | None]:
     """Where a coding agent runs, from its ``options`` in order of preference.
 
     (choice, None): the first option with a free slot whose model starts without swapping
     out one in use and is loaded or would push out no model in ``wanted`` (those bound to
-    some project's roles); failing that, a loaded one, else the first. (None, (node, model,
+    some project's roles); failing that, a loaded one, else the first. Among loaded ones,
+    one on a machine with nothing running (not in ``active``, nor started this pass per
+    ``planned``) goes first, so parallel steps spread over machines. (None, (node, model,
     why)): every free option would swap; the first of them, to wait for. (None, None): no
     option has a free slot."""
-    free: list[tuple[int, str, str, bool, bool]] = []
+    taken = set(active) | set(planned or {})
+    free: list[tuple[int, str, str, bool, bool, bool]] = []
     for nid, model in options:
         n = nodes.get(nid)
         if nid is None or n is None or not node_available(n, load):
@@ -208,11 +233,15 @@ def choose_node(
         reason = residency.blocker(n, model, busy, planned)
         warm = residency.warm(n, model)
         cheap = warm or not residency.displaces(n, model, wanted, planned)
-        free.append((nid, model, reason, warm, cheap))
+        idle = residency.machine_of(n, model) not in taken
+        free.append((nid, model, reason, warm, cheap, idle))
     ok = [f for f in free if not f[2]]
     if ok:
-        nid, model, *_ = next((f for f in ok if f[4]), next((f for f in ok if f[3]), ok[0]))
-        return (nid, model), None
+        pick = next((f for f in ok if f[4]), next((f for f in ok if f[3]), ok[0]))
+        if pick[3] and not pick[5]:
+            # Loaded, but its machine is already working: a loaded one on an idle machine.
+            pick = next((f for f in ok if f[3] and f[5]), pick)
+        return (pick[0], pick[1]), None
     if free:
         nid, model, reason, *_ = free[0]
         return None, (nid, model, reason)
@@ -258,6 +287,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
 
     load = node_load()
     busy_models = residency.in_use()
+    active_machines = residency.machines_in_use()
     wanted = residency.bound_models(projects.values(), nodes)
     planned: dict[str, set[str]] = {}
     max_wait = get_settings().swap_wait_s
@@ -303,7 +333,9 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
         nid, model = options[0]
         if needs_node and nid is not None:
             assert t.id is not None
-            pick, blocked = choose_node(options, nodes, load, busy_models, p, planned, wanted)
+            pick, blocked = choose_node(
+                options, nodes, load, busy_models, p, planned, wanted, active_machines
+            )
             if pick is None and blocked is None:
                 continue  # no free slot on any of its nodes
             if pick is not None:
@@ -319,6 +351,7 @@ def pick_ready() -> list[tuple[Task, int | None, str]]:
             n = nodes[nid]
             load[nid] = load.get(nid, 0) + 1
             residency.reserve(planned, n, model)
+            active_machines.add(residency.machine_of(n, model))
         active[t.project_id] = active.get(t.project_id, 0) + 1
         busy_areas.setdefault(t.project_id, set()).update(req_areas(t))
         ready.append((t, nid, model))

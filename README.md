@@ -217,7 +217,8 @@ coverage, active task, open checkpoints, spend) and the node load; each project 
 done against tasks planned over time, so replanning growth is visible.
 
 **Restarts.** After a crash or restart nothing is left half-done: running
-attempts are marked failed (and retried by the escalation ladder),
+attempts are marked interrupted and requeued without counting as a failed
+attempt (the next attempt picks up in the same task clone),
 interrupted merges are aborted, stray processes and acceptance checks are
 killed, and the main clone is reset to the milestone branch tip.
 
@@ -352,6 +353,13 @@ Docker Desktop, OrbStack or colima work too: point `DOCKER_HOST` (or
 `AI_FACTORY_DOCKER_HOST`) at them, or just leave Docker Desktop's default
 context active, and run `ai-factory doctor`.
 
+When ai-factory runs as a service, `doctor` also checks Docker as the service
+would reach it: the `DOCKER_HOST` from `~/.config/ai-factory/env`, and whether
+the socket's permissions let the user in with its current groups (a fresh
+service start picks up `usermod -aG docker`; a running one does not). If a
+build or `docker run` is refused by the socket anyway, the task or toolchain
+job stops with that message for you; no agent is asked to fix it.
+
 Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
 
 - Local servers are "OpenAI-compatible", e.g. `http://192.168.1.20:8080/v1`
@@ -369,6 +377,13 @@ Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
   spend.
 - **Capacity** is how many task steps and planning calls a node serves at
   once; editable later on the Nodes page.
+- With [ai-swap](https://github.com/hofftodd/ai-swap), **Import from ai-swap**
+  (`POST /api/nodes/import`) adds one node per model in its cluster, pinned to
+  its machine (`flint@studio`), with ai-swap's context length, capacity 1 and
+  no price. Health checks on ai-swap nodes look at the node's own model: one
+  that failed to load, or that ai-swap no longer offers, makes the node
+  unhealthy (a merely unloaded model is fine). When several loaded choices
+  are free, parallel steps go to a machine with nothing running first.
 
 Then add a project, choose a model for each agent (node + model), and start
 talking to the Project Planning Agent.

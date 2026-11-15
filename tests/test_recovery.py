@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from ai_factory import gitops
-from ai_factory.core.models import Project, TaskState
+from ai_factory.core.models import Project, Task, TaskState
 from ai_factory.db import session
 from ai_factory.executors import EXECUTORS
 from ai_factory.orchestrator.main import Orchestrator, recover
@@ -139,3 +139,30 @@ async def test_missing_aider_blocks_instead_of_retrying(client, origin):
         assert "aider is not installed" in row.reason
     finally:
         llm.stop()
+
+
+async def test_interrupted_attempt_reruns_in_its_clone_uncounted(client, origin):
+    """A restart mid-attempt requeues the task (no manual retry); the next attempt
+    reuses the task clone with the cut-off attempt's partial work."""
+    from ai_factory.core.models import TaskRun
+    from ai_factory.core.state import transition
+
+    p = make_project(client, origin)
+    t = make_task(client, p["id"], script="test -f partial")
+    clone = gitops.prepare_task_clone(p["id"], t["id"], p["milestone_branch"])
+    (clone / "partial").write_text("from the cut-off attempt\n")
+    transition(t["id"], (TaskState.QUEUED,), TaskState.RUNNING)
+    with session() as s:
+        row = s.get(Task, t["id"])
+        assert row is not None
+        row.attempts = 1
+        s.add(row)
+        s.add(TaskRun(task_id=t["id"], project_id=p["id"]))
+        s.commit()
+
+    recover()
+    assert task(t["id"]).state == TaskState.QUEUED
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL)
+    row = task(t["id"])
+    assert row.state == TaskState.DONE, row.reason
+    assert row.attempts == 1
