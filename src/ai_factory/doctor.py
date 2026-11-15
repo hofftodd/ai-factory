@@ -7,17 +7,20 @@ gateway's address. Prints what is wrong and how to fix it.
 
 from __future__ import annotations
 
+import grp
 import http.server
 import os
+import pwd
 import secrets
 import shutil
+import stat
 import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
 from ai_factory.config import get_settings
-from ai_factory.engine import HOST_ALIAS, Engine, detect, docker
+from ai_factory.engine import HOST_ALIAS, Engine, detect, docker, docker_host
 
 OK, FAIL, SKIP = "ok", "FAIL", "skip"
 
@@ -65,6 +68,82 @@ def check_engine(r: Report) -> Engine:
         elif inst:
             r.line(OK, f"VM mounts {get_settings().data_dir} writable")
     return eng
+
+
+# The service's environment file (systemd EnvironmentFile=, rendered from keys/templates).
+SERVICE_ENV = Path.home() / ".config" / "ai-factory" / "env"
+DEFAULT_SOCKET = "/var/run/docker.sock"
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines of an env file (comments and blanks skipped, quotes stripped)."""
+    out: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.removeprefix("export ").partition("=")
+        out[key.strip()] = value.strip().strip("'\"")
+    return out
+
+
+def service_docker_host(env: dict[str, str]) -> str:
+    """The DOCKER_HOST the service resolves: its env file's settings, else as here."""
+    return env.get("AI_FACTORY_DOCKER_HOST") or env.get("DOCKER_HOST") or docker_host()
+
+
+def socket_access(sock: Path, user: str) -> tuple[bool, str]:
+    """(ok, detail): can ``user``, started afresh as a service is (so with the groups in
+    /etc/group now, not the ones this shell logged in with), open the Docker socket?"""
+    try:
+        st = sock.stat()
+    except OSError as e:
+        return False, f"{sock}: {e.strerror or e}"
+    pw = pwd.getpwnam(user)
+    groups = set(os.getgrouplist(user, pw.pw_gid))
+    try:
+        group = grp.getgrgid(st.st_gid).gr_name
+    except KeyError:
+        group = str(st.st_gid)
+    mode = stat.S_IMODE(st.st_mode)
+    rw_owner, rw_group, rw_other = (mode & m == m for m in (0o600, 0o060, 0o006))
+    ok = (
+        pw.pw_uid == 0
+        or (st.st_uid == pw.pw_uid and rw_owner)
+        or (st.st_gid in groups and rw_group)
+        or rw_other
+    )
+    detail = f"{sock} mode {mode:o}, group {group}; {user} is in {group}: {st.st_gid in groups}"
+    return ok, detail
+
+
+def check_service_docker(r: Report, env_file: Path | None = None, user: str = "") -> None:
+    """Docker as the service would reach it: the DOCKER_HOST from the service's env file,
+    and the socket's permissions against the user's current groups. (This shell may have
+    other groups than a freshly started service, either way.)"""
+    env_file = env_file or SERVICE_ENV
+    user = user or pwd.getpwuid(os.getuid()).pw_name
+    env = read_env_file(env_file)
+    host = service_docker_host(env) or f"unix://{DEFAULT_SOCKET}"
+    source = f"from {env_file}" if env else "(no service env file)"
+    if not host.startswith("unix://"):
+        r.line(OK, f"service docker host {host} {source} (not a local socket)")
+        return
+    ok, detail = socket_access(Path(host.removeprefix("unix://")), user)
+    if ok:
+        r.line(OK, f"the service can use the Docker socket {source}: {detail}")
+        return
+    group = detail.split("group ", 1)[1].split(";", 1)[0] if "group " in detail else "docker"
+    r.line(
+        FAIL,
+        f"the service cannot use the Docker socket {source}: {detail}",
+        f"`sudo usermod -aG {group} {user}`, then restart the ai-factory service "
+        "(`sudo systemctl restart ai-factory`); a running service keeps its old groups",
+    )
 
 
 def check_image(r: Report) -> bool:
@@ -190,6 +269,7 @@ def run(extra: list[Callable[[Report, Engine], None]] | None = None) -> int:
         r.line(SKIP, "AI_FACTORY_RUNTIME is not docker: executors run without isolation")
         return 0
     eng = check_engine(r)
+    check_service_docker(r)
     if eng.available and check_image(r):
         check_mount_write(r)
         check_gateway_reach(r, eng)

@@ -353,6 +353,13 @@ Docker Desktop, OrbStack or colima work too: point `DOCKER_HOST` (or
 `AI_FACTORY_DOCKER_HOST`) at them, or just leave Docker Desktop's default
 context active, and run `ai-factory doctor`.
 
+When ai-factory runs as a service, `doctor` also checks Docker as the service
+would reach it: the `DOCKER_HOST` from `~/.config/ai-factory/env`, and whether
+the socket's permissions let the user in with its current groups (a fresh
+service start picks up `usermod -aG docker`; a running one does not). If a
+build or `docker run` is refused by the socket anyway, the task or toolchain
+job stops with that message for you; no agent is asked to fix it.
+
 Open http://127.0.0.1:8700 and add your model servers under **Nodes**:
 
 - Local servers are "OpenAI-compatible", e.g. `http://192.168.1.20:8080/v1`

@@ -42,6 +42,7 @@ from ai_factory.core.models import (
 from ai_factory.core.state import ACTIVE_STATES, emit, finish_run, stop_requested, transition
 from ai_factory.core.watchdog import failure_signature
 from ai_factory.db import session
+from ai_factory.engine import docker_access_problem
 from ai_factory.executors import EXIT_CONFIG, Executor, ExecutorContext, OutputParser, get_executor
 from ai_factory.executors.shell import role_scripts
 from ai_factory.gateway import new_token
@@ -339,6 +340,10 @@ class TaskRunner:
         if reason:
             kind = "budget" if reason.startswith("spend cap") else ""
             raise WatchdogTrip(f"watchdog: {reason}", reason, kind)
+        # `docker run` refused by the socket: the host's setup, blocking, not retried.
+        denied = code != 0 and self.runtime.name == "docker"
+        if denied and (problem := docker_access_problem("\n".join(self._tail))):
+            raise ConfigError(problem, "\n".join(self._tail))
         return code
 
     async def _toolchain_image(self, project_id: int, clone: Path) -> str:
@@ -359,6 +364,8 @@ class TaskRunner:
             tag = await images.ensure_image(
                 project_id, clone, on_output=output, on_handle=self._set_handle
             )
+        except images.DockerAccessError as e:
+            raise ConfigError(str(e), e.output) from e
         except images.ImageBuildError as e:
             self._check()  # a Stop that killed the build is a stop, not a failure
             raise ConfigError(f"{e}; fix {images.DOCKERFILE}", e.output) from e

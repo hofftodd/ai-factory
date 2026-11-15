@@ -44,6 +44,7 @@ from ai_factory.core.models import (
 )
 from ai_factory.core.state import emit
 from ai_factory.db import session
+from ai_factory.engine import docker_access_problem, docker_env
 from ai_factory.llm import Aborted
 from ai_factory.planner import BASE_IMAGE, doc_path
 from ai_factory.sandbox import Proc, kill_handle
@@ -194,6 +195,7 @@ async def run_check(tag: str, context: Path, on_handle: Callable[[str], None]) -
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         stdin=asyncio.subprocess.DEVNULL,
+        env=docker_env(),
         start_new_session=True,
     )  # fmt: skip
     check = Proc(f"local:{proc.pid}", proc)
@@ -210,6 +212,8 @@ async def run_check(tag: str, context: Path, on_handle: Callable[[str], None]) -
     except TimeoutError:
         await asyncio.to_thread(kill_handle, check.handle)
         return 124, "\n".join([*lines, f"(check timed out after {CHECK_TIMEOUT_S}s)"])
+    if code != 0 and (problem := docker_access_problem("\n".join(lines))):
+        raise images.DockerAccessError(problem, "\n".join(lines))
     return code, "\n".join(lines)
 
 
@@ -266,7 +270,12 @@ async def run_environment(job: JobRunner, node: Node, model: str) -> None:
     problem = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         text = await job._call(node, model, system, messages)
-        problem, output = await _attempt(project.id, attempt, text, work, guarded, on_output)
+        try:
+            problem, output = await _attempt(project.id, attempt, text, work, guarded, on_output)
+        except images.DockerAccessError as e:
+            # The host's Docker setup: the agent can't fix it, so it isn't asked to.
+            flush()
+            raise JobFailed(str(e)) from e
         flush()
         if not problem:
             if finish_job(job.job_id, (JobState.RUNNING,), JobState.DONE):
@@ -310,6 +319,8 @@ async def _attempt(
             images.ensure_image(project_id, work, on_output=on_output, on_handle=set_handle),
             handle,
         )
+    except images.DockerAccessError:
+        raise
     except images.ImageBuildError as e:
         return str(e), e.output
     emit(project_id, None, "system", f"environment attempt {attempt}: checking {tag}")

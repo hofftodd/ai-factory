@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ai_factory.config import get_settings
-from ai_factory.engine import docker, docker_env
+from ai_factory.engine import docker, docker_access_problem, docker_env
 from ai_factory.sandbox import Proc, kill_handle
 
 DOCKERFILE = ".ai-factory/Dockerfile"
@@ -43,6 +43,11 @@ class ImageBuildError(RuntimeError):
     def __init__(self, reason: str, output: str = ""):
         super().__init__(reason)
         self.output = output
+
+
+class DockerAccessError(ImageBuildError):
+    """Docker refused this user (socket permissions): the host's setup, not the
+    Dockerfile's. Reported to the user; never handed to an agent to fix."""
 
 
 def _base_repo(image: str) -> str:
@@ -192,4 +197,6 @@ async def _build(
             f"building {DOCKERFILE} timed out after {BUILD_TIMEOUT_S}s", "\n".join(tail)
         ) from None
     if code != 0:
+        if problem := docker_access_problem("\n".join(tail)):
+            raise DockerAccessError(problem, "\n".join(tail))
         raise ImageBuildError(f"building {DOCKERFILE} failed (exit {code})", "\n".join(tail))
