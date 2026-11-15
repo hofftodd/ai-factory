@@ -40,6 +40,7 @@ CAUSE_OF_KIND: dict[str, str] = {
     "conflict": COORDINATION,
     # ai-factory itself crashed.
     "internal": FACTORY,
+    "interrupted": FACTORY,
     # The project's configuration or toolchain.
     "config": SETUP,
     "image": SETUP,

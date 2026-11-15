@@ -217,7 +217,8 @@ coverage, active task, open checkpoints, spend) and the node load; each project 
 done against tasks planned over time, so replanning growth is visible.
 
 **Restarts.** After a crash or restart nothing is left half-done: running
-attempts are marked failed (and retried by the escalation ladder),
+attempts are marked interrupted and requeued without counting as a failed
+attempt (the next attempt picks up in the same task clone),
 interrupted merges are aborted, stray processes and acceptance checks are
 killed, and the main clone is reset to the milestone branch tip.
 

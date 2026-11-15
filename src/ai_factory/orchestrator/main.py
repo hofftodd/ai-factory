@@ -54,7 +54,7 @@ from ai_factory.db import session
 from ai_factory.executors import get_executor
 from ai_factory.gateway import Gateway, new_token, serve
 from ai_factory.llm import list_models
-from ai_factory.orchestrator import gate_actions, milestone
+from ai_factory.orchestrator import escalation, gate_actions, milestone
 from ai_factory.orchestrator.jobs import JobRunner, finish_job, job_role
 from ai_factory.orchestrator.runner import (
     TaskRunner,
@@ -79,13 +79,26 @@ def recover() -> None:
         if run.handle:
             kill_handle(run.handle, 2)
         finish_run(run.id, RunState.INTERRUPTED, "orchestrator restarted during run")
-        transition(
+        with session() as s:
+            row = s.get(TaskRun, run.id)
+            if row is not None:
+                row.failure_kind = "interrupted"
+                s.add(row)
+            t = s.get(Task, run.task_id)
+            if t is not None and t.state in ACTIVE_STATES:
+                # The attempt was cut off, not failed: it doesn't count.
+                t.attempts = max(0, t.attempts - 1)
+                s.add(t)
+            s.commit()
+        if transition(
             run.task_id,
             ACTIVE_STATES,
             TaskState.FAILED,
-            "orchestrator restarted during run; retry to continue",
-        )
-    # Tasks marked active without an open run (crash between transition and run insert).
+            "orchestrator restarted during run",
+        ):
+            escalation.after_failure(run.task_id, run.id)
+    # Tasks marked active without an open run (crash between transition and run insert):
+    # no attempt was counted, so they simply go back in the queue.
     with session() as s:
         orphans = s.exec(select(Task).where(col(Task.state).in_(ACTIVE_STATES))).all()
         open_runs = {
@@ -93,7 +106,7 @@ def recover() -> None:
         }
     for t in orphans:
         if t.id is not None and t.id not in open_runs:
-            transition(t.id, ACTIVE_STATES, TaskState.FAILED, "orchestrator restarted")
+            transition(t.id, ACTIVE_STATES, TaskState.QUEUED, "orchestrator restarted")
     # Planner jobs cut off mid-call.
     with session() as s:
         jobs = s.exec(select(PlannerJob).where(PlannerJob.state == JobState.RUNNING)).all()

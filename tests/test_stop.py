@@ -223,9 +223,11 @@ def test_orchestrator_crash_recovery(client, origin, procs):
     assert _alive_in_group(pgid)  # the agent outlived its orchestrator...
     start("orchestrator")
     wait_for(lambda: not _alive_in_group(pgid), timeout=15)  # ...until recovery
-    wait_for(lambda: task(t["id"]).state == TaskState.FAILED)
-    assert "restarted" in task(t["id"]).reason
-    assert _run_state(run.id) == RunState.INTERRUPTED
+    wait_for(lambda: _run_state(run.id) == RunState.INTERRUPTED)
+    # Requeued by recovery (no manual retry) and started again, uncounted.
+    again = _open_run(t["id"])
+    assert again.id != run.id
+    assert task(t["id"]).attempts == 1
 
 
 class _StreamHandler(http.server.BaseHTTPRequestHandler):

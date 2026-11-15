@@ -464,8 +464,9 @@ format.
 If ai-factory crashes or the machine restarts, nothing is left half-done. On
 start-up the orchestrator:
 
-- marks any attempt that was running as failed, with a reason, and the
-  escalation ladder retries it;
+- marks any attempt that was running as interrupted (`failure_kind`
+  "interrupted") and puts the task back in the queue: the attempt is not
+  counted, uses no retry, and the next one continues in the same task clone;
 - marks interrupted planning calls as failed so you can send the message
   again;
 - kills leftover containers and re-runs an interrupted acceptance check;
