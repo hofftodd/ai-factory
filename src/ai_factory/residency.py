@@ -218,6 +218,46 @@ def in_use() -> dict[tuple[str, str], str]:
     return out
 
 
+# -- which model a node is for ------------------------------------------------------------
+
+
+def bound_by_node(projects: Iterable[Project]) -> dict[int, list[str]]:
+    """Node id -> the models projects' role bindings use on it (fallbacks included), one
+    entry per binding."""
+    bound: dict[int, list[str]] = {}
+    for p in projects:
+        for b in (p.role_bindings or {}).values():
+            if not isinstance(b, dict):
+                continue
+            for c in (b, *(b.get("also") or [])):
+                if isinstance(c, dict) and c.get("node_id") and c.get("model"):
+                    bound.setdefault(int(c["node_id"]), []).append(str(c["model"]))
+    return bound
+
+
+def named_model(n: Node, ids: Iterable[str]) -> str:
+    """The model named like the node ("thinkingcap" -> "thinkingcap-qwen3.8-27b", or
+    "flint@studio" for a node imported from ai-swap), else ""."""
+    name = n.name.lower()
+    for group in (list(ids), n.models):
+        exact = [m for m in group if m.lower() == name]
+        prefixed = sorted(
+            (m for m in group if m.lower().startswith(name) and "@" not in m), key=len
+        )
+        if exact or prefixed:
+            return (exact or prefixed)[0]
+    return ""
+
+
+def node_model(n: Node, bound: list[str], cluster: Iterable[str]) -> str:
+    """The model a node stands for: the one projects bind to it most, else the cluster model
+    named like the node, else its first model. (The node health check fills ``models``
+    with everything the endpoint serves.)"""
+    if bound:
+        return max(set(bound), key=bound.count)
+    return named_model(n, cluster) or (n.models[0] if n.models else "")
+
+
 # -- the decision -----------------------------------------------------------------------
 
 

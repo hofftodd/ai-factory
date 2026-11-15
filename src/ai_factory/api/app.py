@@ -77,7 +77,7 @@ from ai_factory.core.state import (
 from ai_factory.db import control_session, session
 from ai_factory.executors import EXECUTORS
 from ai_factory.executors.shell import role_scripts
-from ai_factory.llm import list_models
+from ai_factory.llm import check_node_health
 from ai_factory.orchestrator.gate_actions import send_back_to_tester
 
 
@@ -709,21 +709,6 @@ async def residency_conflicts(body: dict[str, Any]) -> dict[str, list[str]]:
     return {"warnings": await residency.binding_conflicts(bindings)}
 
 
-def _node_model(n: Node, bound: list[str], cluster: dict[str, Any]) -> str:
-    """The model a node stands for: the one projects bind to it most, else the cluster model
-    named like the node ("thinkingcap" -> "thinkingcap-qwen3.8-27b"), else its first model.
-    (The node health check fills ``models`` with everything the endpoint serves.)"""
-    if bound:
-        return max(set(bound), key=bound.count)
-    name = n.name.lower()
-    for ids in (list(cluster), n.models):
-        exact = [m for m in ids if m.lower() == name]
-        prefixed = sorted((m for m in ids if m.lower().startswith(name) and "@" not in m), key=len)
-        if exact or prefixed:
-            return (exact or prefixed)[0]
-    return n.models[0] if n.models else ""
-
-
 @router.get("/api/machines")
 async def list_machines() -> list[dict[str, Any]]:
     """The computers behind the nodes. For an ai-swap endpoint, every machine in its cluster,
@@ -734,14 +719,7 @@ async def list_machines() -> list[dict[str, Any]]:
         projects = list(s.exec(select(Project)))
     load = await run_in_threadpool(_node_load)
     # A node is an endpoint; the model it's used for is what projects bind to it.
-    bound: dict[int, list[str]] = {}
-    for p in projects:
-        for b in (p.role_bindings or {}).values():
-            if not isinstance(b, dict):
-                continue
-            for c in (b, *(b.get("also") or [])):
-                if isinstance(c, dict) and c.get("node_id") and c.get("model"):
-                    bound.setdefault(int(c["node_id"]), []).append(str(c["model"]))
+    bound = residency.bound_by_node(projects)
     endpoints: dict[str, Node] = {}
     for n in nodes:
         endpoints.setdefault(residency.root(n), n)
@@ -772,7 +750,7 @@ async def list_machines() -> list[dict[str, Any]]:
             )
     for n in nodes:
         v = views.get(residency.root(n))
-        model = _node_model(n, bound.get(n.id or 0, []), v.ids if v else {})
+        model = residency.node_model(n, bound.get(n.id or 0, []), v.ids if v else {})
         state = ""
         if v is not None and model in v.ids:
             where, name = v.ids[model]
@@ -832,9 +810,11 @@ def delete_node(node_id: int) -> None:
 async def check_node(node_id: int) -> dict[str, Any]:
     n = _get(Node, node_id)
     healthy, models, error = False, list(n.models), ""
+    with session() as s:
+        wanted = residency.bound_by_node(s.exec(select(Project)).all()).get(node_id, [])
     try:
-        found = await list_models(n)
-        healthy, models = True, found or models
+        health = await check_node_health(n, sorted(set(wanted)))
+        healthy, models, error = not health.problem, health.models or models, health.problem
     except Exception as e:  # noqa: BLE001 - report any failure to the UI
         error = str(e) or type(e).__name__
     with session() as s:

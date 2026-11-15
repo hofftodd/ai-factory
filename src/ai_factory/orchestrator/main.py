@@ -53,7 +53,7 @@ from ai_factory.core.state import (
 from ai_factory.db import session
 from ai_factory.executors import get_executor
 from ai_factory.gateway import Gateway, new_token, serve
-from ai_factory.llm import list_models
+from ai_factory.llm import check_node_health
 from ai_factory.orchestrator import escalation, gate_actions, milestone
 from ai_factory.orchestrator.jobs import JobRunner, finish_job, job_role
 from ai_factory.orchestrator.runner import (
@@ -160,16 +160,24 @@ def node_available(node: Node | None, load: dict[int, int]) -> bool:
 
 
 async def check_nodes() -> None:
-    """Refresh each node's health and model list; announce changes."""
+    """Refresh each node's health and model list; announce changes.
+
+    On an ai-swap endpoint the node is unhealthy when a model it is used for (bound by a
+    project, else named like the node) has failed or isn't offered (llm.check_node_health)."""
     with session() as s:
         nodes = s.exec(select(Node)).all()
+        bound = residency.bound_by_node(s.exec(select(Project)).all())
 
     async def one(node: Node) -> None:
+        assert node.id is not None
+        wanted = sorted(set(bound.get(node.id, [])))
         try:
-            models = await asyncio.wait_for(list_models(node), 15)
-            healthy, error = True, ""
+            health = await asyncio.wait_for(check_node_health(node, wanted), 15)
+            models, error = health.models, health.problem
+            healthy, word = not error, "unhealthy"
         except Exception as e:  # noqa: BLE001 - any failure means unreachable
-            models, healthy, error = list(node.models), False, str(e) or type(e).__name__
+            models, healthy = list(node.models), False
+            error, word = str(e) or type(e).__name__, "unreachable"
         with session() as s:
             row = s.get(Node, node.id)
             if row is None:
@@ -184,7 +192,7 @@ async def check_nodes() -> None:
                 None,
                 None,
                 "system",
-                f"node {node.name} is {'back' if healthy else 'unreachable'}"
+                f"node {node.name} is {'back' if healthy else word}"
                 + (f": {error}" if error else ""),
                 node_id=node.id,
             )

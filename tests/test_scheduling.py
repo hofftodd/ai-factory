@@ -457,3 +457,51 @@ def test_tasks_in_one_requirement_area_do_not_run_together(client, origin):
         s.commit()
     assert a not in [t.id for t, _, _ in pick_ready()]
     assert all("FR-2.2" not in t.req_refs for t, _, _ in pick_ready())
+
+
+def swap_endpoint(llm: FakeLLM, **models: str) -> None:
+    """Make the fake an ai-swap endpoint on machine "studio" serving models name=status."""
+    llm.swap_status = {"node": {"name": "studio", "models": []}, "peers": []}
+    llm.swap_models = [
+        {"id": m, "node": "studio", "status": st, "context_length": 65536}
+        for m, st in models.items()
+    ]
+
+
+async def test_ai_swap_health_is_per_model(client, origin, llm):
+    swap_endpoint(llm, flint="stopped", quartz="failed")
+    flint = add_node(client, name="flint@studio", base_url=llm.url)
+    quartz = add_node(client, name="quartz@studio", base_url=llm.url)
+    gone = add_node(client, name="other", base_url=llm.url)
+    make_project(
+        client,
+        origin,
+        executor_kind="opencode",
+        role_bindings={"executor": {"node_id": gone["id"], "model": "missing"}},
+    )
+    await check_nodes()
+    assert node(flint["id"]).healthy is True  # stopped = merely unloaded
+    assert node(quartz["id"]).healthy is False  # failed
+    assert node(gone["id"]).healthy is False  # bound model not offered (not runnable)
+
+    swap_endpoint(llm, flint="failed", quartz="ready")
+    await check_nodes()
+    assert node(flint["id"]).healthy is False
+    assert node(quartz["id"]).healthy is True
+    assert events("node flint@studio is unhealthy: flint@studio failed to load on studio")
+    assert events("node quartz@studio is back")
+
+
+async def test_plain_openai_node_health_unchanged(client, llm):
+    n = add_node(client, name="flint@studio", base_url=llm.url)  # no /api/status
+    await check_nodes()
+    assert node(n["id"]).healthy is True
+    r = client.post(f"/api/nodes/{n['id']}/check").json()
+    assert r["healthy"] is True and r["error"] == ""
+
+
+async def test_check_button_reports_failed_swap_model(client, llm):
+    swap_endpoint(llm, flint="failed")
+    n = add_node(client, name="flint@studio", base_url=llm.url)
+    r = client.post(f"/api/nodes/{n['id']}/check").json()
+    assert r["healthy"] is False and "flint@studio failed to load" in r["error"]

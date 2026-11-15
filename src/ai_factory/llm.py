@@ -29,17 +29,19 @@ call (FR-8.2).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx
 
-from ai_factory import repotools
+from ai_factory import repotools, residency
 from ai_factory import research as web
 from ai_factory.core.contextpack import estimate_tokens
 from ai_factory.core.models import Node
@@ -461,3 +463,67 @@ async def list_models(node: Node) -> list[str]:
         r = await client.get(f"{node.base_url.rstrip('/')}/models", headers=headers)
         r.raise_for_status()
         return [m.get("id") for m in r.json().get("data", []) if m.get("id")]
+
+
+@dataclass
+class Health:
+    """A node's health check: the models it serves and, when it answered but can't run
+    the work it's for, why not (``problem``)."""
+
+    models: list[str]
+    problem: str = ""
+    ai_swap: bool = False
+
+
+def _swap_entry(entries: list[dict[str, Any]], model: str) -> dict[str, Any] | None:
+    """ai-swap's /v1/models entry for ``model``: listed by id, or pinned as name@machine
+    (ai-swap lists a model bare unless two machines have one of that name)."""
+    for e in entries:
+        if e.get("id") == model:
+            return e
+    name, _, machine = model.partition("@")
+    for e in entries:
+        if machine and e.get("node") == machine and str(e.get("id", "")).split("@")[0] == name:
+            return e
+    return None
+
+
+async def check_node_health(node: Node, wanted: list[str]) -> Health:
+    """Health check. Raises when the node doesn't answer. On an ai-swap endpoint (it
+    answers /api/status) each model in ``wanted`` (the models the node is used for; if
+    none, the model named like the node, as ai-swap imports are) must be offered and not
+    failed; ``stopped`` is fine (merely unloaded). Any other endpoint is healthy when
+    /v1/models answers."""
+    if node.provider == "anthropic":
+        return Health(await list_models(node))
+    headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
+    base = node.base_url.rstrip("/")
+    u = urlsplit(base)
+    root = f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else ""
+    async with httpx.AsyncClient(timeout=5, headers=headers) as client:
+        r = await client.get(f"{base}/models")
+        r.raise_for_status()
+        entries = [m for m in r.json().get("data", []) if isinstance(m, dict) and m.get("id")]
+        models = [str(m["id"]) for m in entries]
+        swap = False
+        if root:
+            with contextlib.suppress(httpx.HTTPError, ValueError):
+                st = await client.get(root + "/api/status")
+                swap = st.status_code == 200 and isinstance(st.json(), dict) and "node" in st.json()
+    if not swap:
+        return Health(models)
+    # Pinned forms too (name@machine): what imported nodes and bindings use.
+    for e in entries:
+        pinned = f"{str(e['id']).split('@')[0]}@{e['node']}" if e.get("node") else ""
+        if pinned and pinned not in models:
+            models.append(pinned)
+    if not wanted and (named := residency.named_model(node, models)):
+        wanted = [named]
+    problems = []
+    for model in wanted:
+        entry = _swap_entry(entries, model)
+        if entry is None:
+            problems.append(f"{model} is not offered (not configured, or not runnable)")
+        elif entry.get("status") == "failed":
+            problems.append(f"{model} failed to load on {entry.get('node') or 'its machine'}")
+    return Health(models, "; ".join(problems), ai_swap=True)
