@@ -275,3 +275,18 @@ def test_docker_access_problem_only_for_the_socket():
     assert "docker group" in docker_access_problem(DENIED)
     assert docker_access_problem("cp: /w/x: Permission denied") == ""
     assert docker_access_problem("") == ""
+
+
+def test_parse_files_takes_a_repeated_opening_line_as_the_closer():
+    # deepseek on future-lab-auth closed each file by repeating its opening line, inside a
+    # code fence, then wrote prose; the repeat used to start an empty second Dockerfile that
+    # replaced the real one ("no FROM line").
+    answer = (
+        "```dockerfile\n<<<FILE .ai-factory/Dockerfile\nFROM ai-factory/executor-base\n"
+        "RUN echo hi\n<<<FILE .ai-factory/Dockerfile\n```\n\nNow the check script:\n"
+        "```sh\n<<<FILE .ai-factory/check.sh\n#!/bin/sh\nnode --version\n"
+        "<<<FILE .ai-factory/check.sh\n```\n\nThe image provides Node."
+    )
+    files = parse_files(answer)
+    assert files[".ai-factory/Dockerfile"] == "FROM ai-factory/executor-base\nRUN echo hi\n"
+    assert files[".ai-factory/check.sh"] == "#!/bin/sh\nnode --version\n"

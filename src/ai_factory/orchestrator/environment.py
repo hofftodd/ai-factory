@@ -59,10 +59,15 @@ OUTPUT_TAIL = 60
 ABORT_POLL_S = 1.0
 
 # A file ends at its `>>>` line, or where the next file starts: models sometimes forget to
-# close one (deepseek on larder-2 left the Dockerfile open, so it swallowed check.sh). The
-# last file must still be closed, since an unclosed one may have been cut off.
+# close one (deepseek on larder-2 left the Dockerfile open, so it swallowed check.sh). Some
+# close a file by repeating its opening line instead (deepseek on future-lab-auth wrote
+# `<<<FILE .ai-factory/Dockerfile` again after the Dockerfile); that repeat is a closer, not
+# a new, empty copy of the file. The last file must still be closed, since an unclosed one
+# may have been cut off.
 _FILE = re.compile(
-    r"^<<<FILE[ \t]+(\S+)[ \t]*\n(.*?)(?:^>>>[ \t]*$|(?=^<<<FILE[ \t]))", re.S | re.M
+    r"^<<<FILE[ \t]+(\S+)[ \t]*\n(.*?)"
+    r"(?:^>>>[ \t]*$|^<<<FILE[ \t]+\1[ \t]*$|(?=^<<<FILE[ \t]))",
+    re.S | re.M,
 )
 
 
