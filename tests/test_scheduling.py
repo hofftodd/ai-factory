@@ -492,6 +492,21 @@ async def test_ai_swap_health_is_per_model(client, origin, llm):
     assert events("node quartz@studio is back")
 
 
+async def test_pinned_node_lists_only_its_own_model(client, origin, llm):
+    """ai-swap lists the whole cluster at every address; a node pinned to one model
+    ("flint@studio", as imported) keeps just that model, from the background check and
+    the Check button alike. An unpinned node still gets everything offered."""
+    swap_endpoint(llm, flint="ready", quartz="stopped", deepseek="stopped")
+    flint = add_node(client, name="flint@studio", base_url=llm.url)
+    plain = add_node(client, name="studio", base_url=llm.url)
+    await check_nodes()
+    assert node(flint["id"]).models == ["flint@studio"]
+    assert node(flint["id"]).healthy is True
+    assert {"flint", "quartz", "deepseek", "quartz@studio"} <= set(node(plain["id"]).models)
+    r = client.post(f"/api/nodes/{flint['id']}/check")
+    assert r.status_code == 200 and r.json()["models"] == ["flint@studio"]
+
+
 async def test_plain_openai_node_health_unchanged(client, llm):
     n = add_node(client, name="flint@studio", base_url=llm.url)  # no /api/status
     await check_nodes()

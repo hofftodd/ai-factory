@@ -526,4 +526,9 @@ async def check_node_health(node: Node, wanted: list[str]) -> Health:
             problems.append(f"{model} is not offered (not configured, or not runnable)")
         elif entry.get("status") == "failed":
             problems.append(f"{model} failed to load on {entry.get('node') or 'its machine'}")
+    # A node pinned to one model ("flint@studio", as imported from ai-swap) stands for that
+    # model alone. ai-swap lists the whole cluster at every address, so storing everything
+    # it offers would give every node the same long list of every model.
+    if "@" in node.name:
+        models = [node.name]
     return Health(models, "; ".join(problems), ai_swap=True)
