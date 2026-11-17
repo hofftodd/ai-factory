@@ -38,6 +38,26 @@ def test_pi_prepare(tmp_path):
     assert "--tools read,bash,edit,write,grep,find,ls" in script
     assert 'PI_CODING_AGENT_DIR="$HOME/.pi/agent"' in script
     assert inv.env == {"AI_FACTORY_MODEL": "qwen3-coder"}
+
+
+def test_pi_prompt_goes_in_on_stdin_whatever_its_size(tmp_path):
+    """A prompt as one argument fails past 128 KB ("Argument list too long", exit 126): three
+    future-lab-auth tasks escalated to DeepSeek's 262K context were blocked by it."""
+    big = "x" * 300_000
+    inv = PiExecutor().prepare(
+        Project(name="p", repo_url="x"),
+        Task(project_id=1, title="t"),
+        "http://gw/v1",
+        "m",
+        tmp_path,
+        big,
+        ExecutorContext(context_window=262144),
+    )
+    script = inv.command[-1]
+    assert script.endswith('< "$AI_FACTORY_CTL/prompt.md"')
+    assert "$(cat" not in script
+    assert len(script) < 2000
+    assert (tmp_path / "prompt.md").read_text() == big
     assert inv.output is not None
 
 

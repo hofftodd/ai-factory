@@ -204,8 +204,11 @@ class PiExecutor:
                 'mkdir -p "$HOME/.pi/agent" '
                 '&& cp "$AI_FACTORY_CTL/pi/models.json" "$HOME/.pi/agent/" '
                 '&& export PI_CODING_AGENT_DIR="$HOME/.pi/agent" '
-                f'&& exec pi {flags} --provider {PROVIDER} --model "$AI_FACTORY_MODEL" -- '
-                '"$(cat "$AI_FACTORY_CTL/prompt.md")"',
+                # The prompt goes in on stdin: as one argument it fails past Linux's 128 KB
+                # per-argument limit ("Argument list too long", exit 126), which a large
+                # context pack on a long-context model reaches.
+                f'&& exec pi {flags} --provider {PROVIDER} --model "$AI_FACTORY_MODEL" '
+                '< "$AI_FACTORY_CTL/prompt.md"',
             ],
             env={"AI_FACTORY_MODEL": model},
             output=PiOutput(),
