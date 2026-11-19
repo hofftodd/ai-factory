@@ -266,6 +266,65 @@ async def test_rejected_merge_fails_the_task(client, origin):
     assert "merge rejected by user: ugly" in task(t["id"]).reason
 
 
+def merge_meanwhile(p: dict[str, Any], name: str, text: str) -> None:
+    """Another task's work lands on the milestone branch while a gate waits."""
+    r = gitops.repo_dir(p["id"])
+    (r / name).write_text(text)
+    git("add", name, cwd=r)
+    git("commit", "-qm", f"meanwhile: {name}", cwd=r)
+
+
+def merge_runs(task_id: int) -> list[TaskRun]:
+    with session() as s:
+        q = select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.step == "merge")
+        return list(s.exec(q).all())
+
+
+async def test_approved_merge_behind_the_milestone_is_checked_again(client, origin):
+    # Work merged while the gate waited: the task is never merged untested with it. It
+    # goes back to the queue (uncounted), brings that work in, and asks again.
+    p = auto_project(client, origin, gates={"task_merge": True, "milestone": False})
+    t = make_task(client, p["id"], script="echo hi > mine.txt")
+    orch = Orchestrator()
+    await drive(orch, lambda: task(t["id"]).state == TaskState.AWAITING_MERGE)
+    merge_meanwhile(p, "theirs.txt", "theirs\n")
+    (gate,) = gates_of(p["id"], GateKind.TASK_MERGE)
+    client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})
+    await drive(
+        orch,
+        lambda: (
+            len(gates_of(p["id"], GateKind.TASK_MERGE)) == 2
+            and task(t["id"]).state == TaskState.AWAITING_MERGE
+        ),
+    )
+    (run,) = merge_runs(t["id"])
+    assert run.failure_kind == "behind" and "while the task waited" in run.reason
+    assert task(t["id"]).level_failures == 0
+    assert (gitops.task_dir(p["id"], t["id"]) / "theirs.txt").exists()
+    again = gates_of(p["id"], GateKind.TASK_MERGE)[-1]
+    client.post(f"/api/gates/{again.id}/resolve", json={"approve": True})
+    await drive(orch, lambda: task(t["id"]).state == TaskState.DONE)
+    repo = gitops.repo_dir(p["id"])
+    assert (repo / "mine.txt").exists() and (repo / "theirs.txt").exists()
+
+
+async def test_approved_merge_that_conflicts_is_not_left_failed(client, origin):
+    # The conflict goes the way any other does: here (a script task, no Builder) it
+    # blocks with the conflict gate, instead of ending as "merge failed".
+    p = auto_project(client, origin, gates={"task_merge": True, "milestone": False})
+    t = make_task(client, p["id"], script="echo mine > same.txt")
+    orch = Orchestrator()
+    await drive(orch, lambda: task(t["id"]).state == TaskState.AWAITING_MERGE)
+    merge_meanwhile(p, "same.txt", "theirs\n")
+    (gate,) = gates_of(p["id"], GateKind.TASK_MERGE)
+    client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})
+    await drive(orch, lambda: task(t["id"]).state == TaskState.BLOCKED)
+    assert merge_runs(t["id"])[0].failure_kind == "behind"
+    (stuck,) = gates_of(p["id"], GateKind.ESCALATION)
+    assert "start the task over from the milestone branch" in stuck.detail
+    assert "merge failed" not in task(t["id"]).reason
+
+
 def test_inbox_lists_pending_with_names(client, origin):
     from ai_factory.core import gates
 
