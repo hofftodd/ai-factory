@@ -212,3 +212,28 @@ def test_test_note_is_saved_and_editable(client, origin):
     assert p["test_note"] == "make test"
     r = client.patch(f"/api/projects/{p['id']}", json={"test_note": "tox -e py312"})
     assert r.status_code == 200 and r.json()["test_note"] == "tox -e py312"
+
+
+def test_new_tasks_take_the_projects_time_limit(client, origin):
+    p = make_project(client, origin, task_timeout_s=5400)
+    body = {"title": "x", "validation_cmd": "true"}
+    r = client.post(f"/api/projects/{p['id']}/tasks", json=body)
+    assert r.status_code == 201 and r.json()["timeout_s"] == 5400
+    r = client.post(f"/api/projects/{p['id']}/tasks", json={**body, "timeout_s": 900})
+    assert r.json()["timeout_s"] == 900
+    client.patch(f"/api/projects/{p['id']}", json={"task_timeout_s": 7200})
+    assert project(p["id"]).task_timeout_s == 7200
+
+
+def test_task_runs_never_show_their_gateway_token(client, origin):
+    from ai_factory.core.models import TaskRun
+    from ai_factory.db import session
+
+    p = make_project(client, origin)
+    t = make_task(client, p["id"], script="true")
+    with session() as s:
+        s.add(TaskRun(task_id=t["id"], project_id=p["id"], gateway_token="secret-path"))
+        s.commit()
+    body = client.get(f"/api/tasks/{t['id']}").json()
+    assert body["runs"] and "gateway_token" not in body["runs"][0]
+    assert "secret-path" not in str(body)

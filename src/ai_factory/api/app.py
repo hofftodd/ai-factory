@@ -351,6 +351,7 @@ async def create_project(body: ProjectCreate) -> Project:
         watchdog=body.watchdog,
         spend_cap_usd=body.spend_cap_usd,
         min_task_coverage=body.min_task_coverage,
+        task_timeout_s=body.task_timeout_s,
         max_parallel_tasks=body.max_parallel_tasks,
         test_note=body.test_note.strip(),
     )
@@ -473,7 +474,10 @@ def create_task(project_id: int, body: TaskCreate) -> Task:
         if not [c for c in body.criteria if c.strip()]:
             raise HTTPException(400, "give the task at least one acceptance criterion")
     _check_deps(project_id, body.deps)
-    t = Task(project_id=project_id, **body.model_dump(), origin="manual")
+    fields = body.model_dump()
+    if fields["timeout_s"] is None:
+        fields["timeout_s"] = p.task_timeout_s
+    t = Task(project_id=project_id, **fields, origin="manual")
     if p.phase == ProjectPhase.PLAN_REVIEW:
         t.state = TaskState.PROPOSED
     if p.phase == ProjectPhase.DONE:
@@ -500,7 +504,8 @@ def get_task(task_id: int) -> dict[str, Any]:
     projects, tasks = pending_stops()
     return {
         **t.model_dump(),
-        "runs": [r.model_dump() for r in runs],
+        # A run's gateway token is the secret part of its model gateway URL: never sent.
+        "runs": [r.model_dump(exclude={"gateway_token"}) for r in runs],
         "stop_pending": task_id in tasks or t.project_id in projects or estop_active(),
     }
 

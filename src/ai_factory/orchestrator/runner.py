@@ -28,7 +28,9 @@ from ai_factory.core import gates, roles, spend, watchdog
 from ai_factory.core.contextpack import build_pack, build_role_pack
 from ai_factory.core.models import (
     Event,
+    Gate,
     GateKind,
+    GateState,
     Node,
     Project,
     RunState,
@@ -961,6 +963,32 @@ class TaskRunner:
         self.run_dir = self.settings.runs_dir / str(self.run_id)
         (self.run_dir / "ctl").mkdir(parents=True, exist_ok=True)
 
+    def _keep_unfinished(
+        self, project: Project, task: Task, role: str, clone: Path, start: str
+    ) -> None:
+        """A step cut off by the watchdog keeps what it wrote: commit it, so the next
+        attempt (which reuses the clone) starts from it rather than from nothing (future-lab's
+        T23 Tester lost an hour at its time limit). Work outside the role's files is dropped,
+        as it would be after a finished step."""
+        try:
+            gitops.commit_all(
+                clone, f"Task {task.key or self.task_id} ({role}, unfinished): {task.title}"
+            )
+            changed = gitops.changed_since(clone, start)
+            if not changed:
+                return
+            if roles.fence(project, role, changed):
+                gitops.reset_to(clone, start)
+                return
+            self._emit(
+                "system",
+                f"kept the {roles.ROLES[role].name}'s unfinished work ({len(changed)} file(s)) "
+                "for the next attempt",
+                files=changed,
+            )
+        except gitops.GitError:  # never turn a timeout into a different failure
+            return
+
     def _agent_timeout(self, task: Task, role: str) -> float:
         """The task's timeout, once more for each earlier run of this role on the task that
         timed out (MAX_TIMEOUT_FACTOR at most): a task that needs longer gets longer,
@@ -1016,6 +1044,7 @@ class TaskRunner:
             ),
             sent_back=self._sent_back(project, clone) if role == roles.TESTER else "",
             failing_acceptance=self._failing_acceptance(task),
+            decisions=user_decisions(task.project_id),
         )
         if pack.over_budget and executor.needs_node:
             raise StepFailed(
@@ -1043,16 +1072,20 @@ class TaskRunner:
             mounts |= {"readonly_dirs": [roles.ENV_DIR]}
         else:
             mounts |= {"readonly_dirs": [*test_paths, roles.ENV_DIR]}
-        async with self._lease(node, model, role):
-            code = await self._step(
-                role,
-                with_services(inv.command),
-                inv.env,
-                "log",
-                self._agent_timeout(task, role),
-                output=inv.output,
-                **mounts,
-            )
+        try:
+            async with self._lease(node, model, role):
+                code = await self._step(
+                    role,
+                    with_services(inv.command),
+                    inv.env,
+                    "log",
+                    self._agent_timeout(task, role),
+                    output=inv.output,
+                    **mounts,
+                )
+        except WatchdogTrip:
+            await asyncio.to_thread(self._keep_unfinished, project, task, role, clone, start)
+            raise
         task = self._check()
         await asyncio.to_thread(
             gitops.commit_all, clone, f"Task {task.key or self.task_id} ({role}): {task.title}"
@@ -1146,6 +1179,18 @@ class TaskRunner:
             if not green:
                 raise StepFailed(
                     "this task changes only acceptance tests, and the regular suite fails",
+                    "\n".join(self._tail),
+                    kind="validation",
+                )
+            if not await self._acceptance_passes(project, task, clone):
+                # The acceptance tests fail against the current code: the task has code to
+                # build, so it can't skip the Builder (future-lab's T21 "wire authentication
+                # into the API" merged its acceptance tests and nothing else).
+                raise StepFailed(
+                    f"this task's tests are all acceptance tests ({roles.ACCEPTANCE_DIR}/), "
+                    "and they fail against the current code, so there is code to build. "
+                    f"Write regular tests (outside {roles.ACCEPTANCE_DIR}/) that fail until "
+                    "the task is built",
                     "\n".join(self._tail),
                     kind="validation",
                 )
@@ -1387,7 +1432,9 @@ class TaskRunner:
         cov = run.changed_coverage if run else None
         if minimum <= 0 or cov is None or cov >= minimum:
             return True
-        why = f"tests cover {cov:.0f}% of the changed lines (minimum {minimum}%)"
+        # Rounded down near the minimum: never "70% (minimum 70%)" for 69.96%.
+        shown = f"{cov:.0f}" if round(cov) < minimum else f"{int(cov * 10) / 10:.1f}"
+        why = f"tests cover {shown}% of the changed lines (minimum {minimum}%)"
         if task.coverage_rounds == 0:
             self._update_task(coverage_rounds=1, tests_ready=False)
             finish_run(self.run_id, RunState.SUCCEEDED, f"{why}; back to the Tester")
@@ -1459,14 +1506,19 @@ class TaskRunner:
         )
         self._emit("review", f"Reviewer ({model or node.name}) is reading the change")
         try:
-            result = await llm.stream_chat(
-                node,
-                model,
-                system,
-                [{"role": "user", "content": "Review the change now."}],
-                repo=clone,
-                should_abort=lambda: stop_requested(task.project_id, self.task_id, self.started_at),
-            )
+            # Like the Tester's and Builder's steps: a lease keeps ai-swap from swapping
+            # the Reviewer's model out mid-review.
+            async with self._lease(node, model, roles.REVIEWER):
+                result = await llm.stream_chat(
+                    node,
+                    model,
+                    system,
+                    [{"role": "user", "content": "Review the change now."}],
+                    repo=clone,
+                    should_abort=lambda: stop_requested(
+                        task.project_id, self.task_id, self.started_at
+                    ),
+                )
         except llm.Aborted:
             raise Stopped("stopped during the review") from None
         except Exception as e:  # noqa: BLE001 - a model error fails the step like any other
@@ -1604,6 +1656,37 @@ class TaskRunner:
         tests = [f for f in changed if roles.is_test_path(project, f)]
         prefix = roles.ACCEPTANCE_DIR + "/"
         return bool(tests) and all(f.startswith(prefix) for f in tests)
+
+    async def _acceptance_passes(self, project: Project, task: Task, clone: Path) -> bool:
+        """Run the acceptance command on the task's clone. True when it passes, or when the
+        project has none (nothing to check against: the task merges as before)."""
+        from ai_factory.orchestrator.milestone import ACCEPTANCE_RUNNER, ACCEPTANCE_TIMEOUT_S
+
+        cmd = project.acceptance_cmd or (
+            f"sh {ACCEPTANCE_RUNNER}" if (clone / ACCEPTANCE_RUNNER).is_file() else ""
+        )
+        if not cmd:
+            return True
+        self._emit(
+            "test", f"acceptance tests only; checking them first: $ {cmd}", step="tests-tester"
+        )
+        code = await self._step(
+            "acceptance-check",
+            ["bash", "-lc", cmd],
+            {},
+            "test",
+            min(task.timeout_s, ACCEPTANCE_TIMEOUT_S),
+            results_dir=self._results_dir("tester-acceptance"),
+        )
+        await asyncio.to_thread(gitops.clean_tree, clone)
+        self._emit(
+            "test",
+            "the acceptance tests pass"
+            if code == 0
+            else f"the acceptance tests fail (exit {code})",
+            step="tests-tester",
+        )
+        return code == 0
 
     def _already_built(self, task: Task, passing: int) -> None:
         """Every one of the task's new tests passed before any work: what it asks for is
@@ -1774,6 +1857,30 @@ def merge_task(task_id: int) -> None:
 
     queue_review(task.project_id, f"task {task.key or task_id} is done", task_id)
     transition(task_id, (TaskState.VALIDATING, TaskState.AWAITING_MERGE), TaskState.DONE)
+
+
+def user_decisions(project_id: int, limit: int = 8) -> list[str]:
+    """The spec changes the user approved, with their notes, newest last. A task planned
+    in the same review as a spec change was written before the user decided on it (and the
+    note may narrow the change: future-lab's "demo users only in demo mode"), so the
+    briefing carries them."""
+    with session() as s:
+        rows = s.exec(
+            select(Gate)
+            .where(
+                Gate.project_id == project_id,
+                Gate.kind == GateKind.SPEC_CHANGE,
+                Gate.state == GateState.APPROVED,
+            )
+            .order_by(col(Gate.id).desc())
+            .limit(limit)
+        ).all()
+    out = []
+    for g in reversed(rows):
+        proposal = " ".join(str(g.payload.get("proposal") or g.title).split())[:400]
+        note = " ".join(g.note.split())[:400]
+        out.append(f"{proposal} (the user's note: {note})" if note else proposal)
+    return out
 
 
 def log_path(run_id: int, step: str) -> Path:

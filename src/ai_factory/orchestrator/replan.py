@@ -447,6 +447,7 @@ def apply_revision(revision_id: int) -> None:
                     # Fixes tests only: the Tester changes them, no Builder runs.
                     no_build=t.get("tests_only") is True,
                     origin="replan",
+                    timeout_s=project.task_timeout_s,
                     state=TaskState.QUEUED,
                 )
                 s.add(row)
@@ -495,10 +496,12 @@ def reject_revision(revision_id: int) -> None:
             s.commit()
 
 
-def apply_spec_change(project_id: int, payload: dict[str, Any]) -> None:
-    """An approved spec change: the Project Planning Agent updates the documents."""
+def apply_spec_change(project_id: int, payload: dict[str, Any], note: str = "") -> None:
+    """An approved spec change: the Project Planning Agent updates the documents. The
+    user's note on the approval narrows or corrects the proposal, so it goes along."""
     proposal = str(payload.get("proposal", "")).strip()
     reason = str(payload.get("reason", "")).strip()
+    note = note.strip()
     with session() as s:
         s.add(
             SpecMessage(
@@ -508,6 +511,12 @@ def apply_spec_change(project_id: int, payload: dict[str, Any]) -> None:
                     "An approved change from the plan review. Update the planning documents "
                     f"to include it, keeping them consistent.\n\nChange: {proposal}\n\n"
                     f"Why: {reason}"
+                    + (
+                        f"\n\nThe user's note on approving it (where it differs from the "
+                        f"change, follow the note): {note}"
+                        if note
+                        else ""
+                    )
                 ),
             )
         )

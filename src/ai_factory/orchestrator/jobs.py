@@ -524,7 +524,13 @@ class JobRunner:
                 )
             )
             for t in ordered:
-                row = task_row(self.project_id, t, deps=[ids[d] for d in t.deps], state=initial)
+                row = task_row(
+                    self.project_id,
+                    t,
+                    deps=[ids[d] for d in t.deps],
+                    state=initial,
+                    timeout_s=project.task_timeout_s,
+                )
                 s.add(row)
                 s.flush()
                 assert row.id is not None

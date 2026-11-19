@@ -261,3 +261,23 @@ def test_testers_own_how_the_tests_run_and_commit_the_lockfile(tmp_path):
     assert "yours alone" not in builder
     for text in (tester, builder):
         assert "Commit the lockfile" in text and "npm install --no-audit" in text
+
+
+def test_packs_carry_the_users_decisions(tmp_path):
+    repo = _repo(tmp_path)
+    project = Project(name="p", repo_url="x")
+    task = Task(project_id=1, key="T1", title="Seed demo users", req_refs=[])
+    for role in ("tester", "builder"):
+        pack = build_role_pack(
+            project,
+            task,
+            repo,
+            role,
+            docs={},
+            test_paths=["tests"],
+            decisions=["Seed demo users (the user's note: only in demo mode)"],
+        )
+        assert "## The user's decisions during the run" in pack.text
+        assert "only in demo mode" in pack.text
+    pack = build_role_pack(project, task, repo, "tester", docs={}, test_paths=["tests"])
+    assert "decisions during the run" not in pack.text

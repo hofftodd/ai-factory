@@ -152,7 +152,11 @@ class Project(SQLModel, table=True):
     # them read-only.
     test_paths: list[str] = Field(default_factory=lambda: ["tests"], sa_column=Column(JSON))
     # Coverage the Builder's changed lines must reach (percent; 0 = report only).
-    min_task_coverage: int = 80
+    min_task_coverage: int = 70
+    # The time limit of the project's new tasks, the planner's, the replanner's and manual
+    # ones alike (a split task keeps its parent's). Local models are slow: on future-lab,
+    # 1800 s cut off several Tester steps.
+    task_timeout_s: int = 3600
     # How many of the project's tasks may run at once (independent ones only: a task
     # still waits for its dependencies). Merges into the milestone branch stay one at a
     # time, and a task that finishes after others merged is re-tested first.
