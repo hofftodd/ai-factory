@@ -449,7 +449,7 @@ async def test_spec_change_is_always_gated(client, origin, llm, planner):
     # Approved: the Project Planning Agent (not ai-factory, not the Task Planner) edits the
     # documents. This older project keeps its original spec.md name.
     planner.chat = "Done.\n<<<FILE specs/001-initial/spec.md\n# Spec\n- FR-1 x\n- FR-2 login\n>>>"
-    client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})
+    client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True, "note": "admins only"})
     await drive(
         orch,
         lambda: "FR-2 login" in gitops.read_repo_file(p["id"], "specs/001-initial/spec.md"),
@@ -457,6 +457,12 @@ async def test_spec_change_is_always_gated(client, origin, llm, planner):
     with session() as s:
         asked = s.exec(select(SpecMessage).where(SpecMessage.role == "user")).all()
     assert "Add FR-2 login" in asked[-1].content
+    # The note narrows the change: the planning agent gets it, and so do task briefings
+    # (tasks planned in the same review were written before the user decided).
+    assert "admins only" in asked[-1].content
+    from ai_factory.orchestrator.runner import user_decisions
+
+    assert user_decisions(p["id"]) == ["Add FR-2 login (the user's note: admins only)"]
 
 
 # -- milestone ------------------------------------------------------------------------------

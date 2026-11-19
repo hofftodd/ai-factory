@@ -279,7 +279,7 @@ async def test_low_coverage_goes_back_to_the_tester_then_asks(client, origin):
     assert test_runs_of(t["id"])[-1].changed_coverage is not None
     with session() as s:
         [gate] = s.exec(select(Gate).where(Gate.kind == GateKind.COVERAGE)).all()
-    assert "minimum 80%" in gate.detail
+    assert "minimum 70%" in gate.detail
     client.post(f"/api/gates/{gate.id}/resolve", json={"approve": True})  # merge anyway
     await drive(orch, lambda: task(t["id"]).state == TaskState.DONE)
 
@@ -295,7 +295,7 @@ async def test_the_tester_hears_why_it_was_sent_back(client, origin):
     await drive(orch, lambda: task(t["id"]).state == TaskState.AWAITING_MERGE, timeout=60)
     first, _, again, _ = runs_of(t["id"])
     assert "Sent back to you" not in pack_of(first)
-    assert "only 67% of the lines this task changed (minimum 80%)" in pack_of(again)
+    assert "only 67% of the lines this task changed (minimum 70%)" in pack_of(again)
     assert "`greet.sh`: 2 of 3 lines run by the tests" in pack_of(again)
     with session() as s:
         gate = s.exec(select(Gate).where(Gate.kind == GateKind.COVERAGE)).one()
@@ -516,6 +516,55 @@ async def test_a_task_that_changes_only_acceptance_tests_merges_without_a_builde
     repo = gitops.repo_dir(p["id"])
     assert (repo / "tests" / "acceptance" / "check_samples.sh").exists()
     assert not (repo / "builder-ran.txt").exists()
+
+
+def acceptance_tests(check: str) -> str:
+    """A Tester that writes only acceptance tests, with the project's acceptance runner."""
+    return (
+        "mkdir -p tests/acceptance\n"
+        f"echo '{check}' > tests/acceptance/check.sh\n"
+        "echo 'sh tests/acceptance/check.sh' > tests/acceptance/run.sh\n"
+    )
+
+
+async def test_acceptance_tests_that_already_pass_merge_without_a_builder(client, origin):
+    p = make_project(client, origin)
+    first = add_task(client, p["id"], scripts(), title="Greet")
+    t = add_task(
+        client,
+        p["id"],
+        scripts(tester=acceptance_tests("sh greet.sh bob | grep -q bob"), builder=NO_BUILDER),
+        title="Use samples in the acceptance tests",
+        deps=[first["id"]],
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.DONE, row.reason
+    assert [r.step for r in runs_of(t["id"])] == ["tester"]
+    assert not (gitops.repo_dir(p["id"]) / "builder-ran.txt").exists()
+
+
+async def test_acceptance_tests_that_fail_send_the_tester_back_for_regular_tests(client, origin):
+    # future-lab's "wire authentication into the API": the Tester wrote only acceptance
+    # tests, the shortcut skipped the Builder, and the task merged with no code.
+    p = make_project(client, origin)
+    first = add_task(client, p["id"], scripts(), title="Greet")
+    t = add_task(
+        client,
+        p["id"],
+        scripts(
+            tester=acceptance_tests("sh greet.sh --shout bob | grep -q BOB"), builder=NO_BUILDER
+        ),
+        title="Shout the greeting",
+        deps=[first["id"]],
+    )
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.FAILED
+    run = runs_of(t["id"])[-1]
+    assert run.failure_kind == "validation"
+    assert "fail against the current code" in run.reason
+    assert not (gitops.repo_dir(p["id"]) / "tests" / "acceptance" / "check.sh").exists()
 
 
 async def test_a_task_that_changes_only_the_test_runner_merges_without_a_builder(client, origin):
@@ -893,3 +942,17 @@ async def test_a_retried_tester_keeps_the_tests_an_earlier_attempt_committed(
     runs = runs_of(t["id"])
     assert [r.step for r in runs] == ["tester", "tester", "builder"], [r.reason for r in runs]
     assert runs[1].failure_kind in ("", None)
+
+
+async def test_a_step_that_times_out_keeps_its_work_for_the_next_attempt(client, origin):
+    # future-lab's T23: the Tester hit its time limit, and the retry started from nothing.
+    p = make_project(client, origin)
+    slow = TESTER + "sleep 30\n"
+    t = add_task(client, p["id"], scripts(tester=slow), title="Greet", timeout_s=3)
+    await drive(Orchestrator(), lambda: task(t["id"]).state in TERMINAL, timeout=60)
+    row = task(t["id"])
+    assert row.state == TaskState.FAILED
+    assert runs_of(t["id"])[-1].failure_kind == "watchdog"
+    clone = gitops.task_dir(p["id"], t["id"])
+    assert "(tester, unfinished)" in git("log", "-1", "--format=%s", cwd=clone)
+    assert (clone / "tests" / "check_greet.sh").exists()

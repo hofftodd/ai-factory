@@ -534,13 +534,16 @@ def build_role_pack(
     previous_failure: str = "",
     sent_back: str = "",
     failing_acceptance: list[str] | None = None,
+    decisions: list[str] | None = None,
 ) -> ContextPack:
     """The briefing for the Tester or the Builder on one task.
 
     `docs` maps planning-document keys (requirements, design, acceptance) to their
     repo paths; `task_tests` are the files the Tester wrote for this task (shown to
     the Builder in full); `sent_back` says why the task's tests came back to the Tester;
-    `failing_acceptance` lists the acceptance tests a repair task was added to fix."""
+    `failing_acceptance` lists the acceptance tests a repair task was added to fix;
+    `decisions` are spec changes the user approved during the run (with their notes),
+    which a task planned before the approval may still contradict."""
     files = repo_files(repo) if (repo / ".git").exists() else []
     test_dirs = ", ".join(f"`{d}/`" for d in test_paths)
     # Tests that live with the code count too (roles.is_test_path).
@@ -602,6 +605,13 @@ def build_role_pack(
             "what a person or caller actually uses (visible text, roles and labels, public "
             "commands and API responses). No Builder runs after you: the whole suite must "
             "pass when you finish.",
+            "",
+        ]
+    if decisions:
+        lines += [
+            "## The user's decisions during the run",
+            "Where the goal below or the planning documents disagree with these, follow these.",
+            *[f"- {d}" for d in decisions],
             "",
         ]
     if task.description:

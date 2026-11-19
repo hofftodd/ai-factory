@@ -37,7 +37,8 @@ class ProjectCreate(BaseModel):
     gates: dict[str, Any] = Field(default_factory=dict)
     watchdog: dict[str, Any] = Field(default_factory=dict)
     spend_cap_usd: float = Field(default=0.0, ge=0)
-    min_task_coverage: int = Field(default=80, ge=0, le=100)
+    min_task_coverage: int = Field(default=70, ge=0, le=100)
+    task_timeout_s: int = Field(default=3600, ge=60, le=24 * 3600)
     max_parallel_tasks: int = Field(default=1, ge=1, le=8)
     # How the project's tests already run (see Project.test_note).
     test_note: str = Field(default="", max_length=2000)
@@ -56,6 +57,7 @@ class ProjectUpdate(BaseModel):
     push_after_merge: bool | None = None
     spend_cap_usd: float | None = Field(default=None, ge=0)
     min_task_coverage: int | None = Field(default=None, ge=0, le=100)
+    task_timeout_s: int | None = Field(default=None, ge=60, le=24 * 3600)
     max_parallel_tasks: int | None = Field(default=None, ge=1, le=8)
     test_paths: list[str] | None = None
     test_note: str | None = Field(default=None, max_length=2000)
@@ -76,7 +78,8 @@ class TaskCreate(BaseModel):
     node_id: int | None = None
     model: str = ""
     executor_script: str = ""
-    timeout_s: int = Field(default=1800, ge=10, le=24 * 3600)
+    # None: the project's task_timeout_s.
+    timeout_s: int | None = Field(default=None, ge=10, le=24 * 3600)
 
 
 class TaskUpdate(BaseModel):

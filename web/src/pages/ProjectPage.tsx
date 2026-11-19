@@ -226,6 +226,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     plan_approval: project.gates?.plan_approval !== false,
     spend_cap_usd: project.spend_cap_usd,
     min_task_coverage: project.min_task_coverage,
+    task_timeout_s: project.task_timeout_s ?? 3600,
     max_parallel_tasks: project.max_parallel_tasks ?? 1,
     test_paths: project.test_paths.join(", "),
     test_note: project.test_note ?? "",
@@ -271,6 +272,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
             context_budget_pct: f.context_budget_pct,
             spend_cap_usd: f.spend_cap_usd,
             min_task_coverage: f.min_task_coverage,
+            task_timeout_s: f.task_timeout_s,
             max_parallel_tasks: f.max_parallel_tasks,
             test_paths: f.test_paths.split(",").map((x) => x.trim()).filter(Boolean),
             test_note: f.test_note.trim(),
@@ -341,6 +343,9 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
       <div className="grid2">
         <Field label="Minimum coverage of changed lines (%)" hint="Below it, the task goes back to the Tester once, then asks you. 0 = only report">
           <input type="number" min={0} max={100} value={f.min_task_coverage} onChange={(e) => set("min_task_coverage", Number(e.target.value))} />
+        </Field>
+        <Field label="Task time limit (minutes)" hint="For new tasks, planned or added later. A step that runs out keeps its work for the next attempt">
+          <input type="number" min={1} max={1440} value={Math.round(f.task_timeout_s / 60)} onChange={(e) => set("task_timeout_s", Number(e.target.value) * 60)} />
         </Field>
         <Field label="Test paths" hint="Comma-separated. Only the Tester may change files here">
           <input className="mono" value={f.test_paths} onChange={(e) => set("test_paths", e.target.value)} />

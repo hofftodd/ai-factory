@@ -183,7 +183,7 @@ async def handle(gate: Gate) -> None:
                 else:
                     replan.reject_revision(rev_id)
         elif gate.kind == GateKind.SPEC_CHANGE and approved:
-            replan.apply_spec_change(gate.project_id, gate.payload)
+            replan.apply_spec_change(gate.project_id, gate.payload, gate.note)
         elif gate.kind == GateKind.BUDGET:
             if approved:
                 spend.raise_cap(gate.project_id, float(gate.payload.get("cap") or 0))
