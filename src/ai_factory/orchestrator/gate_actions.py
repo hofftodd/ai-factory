@@ -71,25 +71,66 @@ def send_back_to_builder(task_id: int, findings: str, note: str = "") -> None:
     transition(task_id, (TaskState.AWAITING_MERGE,), TaskState.QUEUED, "back to the Builder")
 
 
+async def merge_approved(project_id: int, task_id: int) -> None:
+    """Merge a task the user approved. Other tasks may have merged while the gate waited:
+    then the task's work was never tested with theirs, and may conflict with it, so it
+    goes back to the queue instead (failure kind "behind", an uncounted retry). Its next
+    attempt brings in the milestone branch, with any conflicts marked for the Builder,
+    and validates again before it merges. Any other git failure goes up the ladder."""
+    from ai_factory.orchestrator.runner import merge_lock, merge_task
+
+    with session() as s:
+        project = s.get(Project, project_id)
+        assert project is not None
+        branch = project.milestone_branch
+    async with merge_lock(project_id):
+        try:
+            if await asyncio.to_thread(gitops.behind, project_id, task_id, branch):
+                kind = "behind"
+                reason = (
+                    f"work merged into {branch} while the task waited for approval; "
+                    "it brings that in and is checked again before it merges"
+                )
+            else:
+                await asyncio.to_thread(merge_task, task_id)
+                return
+        except gitops.GitError as e:
+            kind, reason = "merge", f"merge failed: {e}"
+    _fail_approved(project_id, task_id, kind, reason)
+
+
+def _fail_approved(project_id: int, task_id: int, kind: str, reason: str) -> None:
+    """Record why an approved merge didn't happen as a failed run, and let the escalation
+    ladder decide what comes next (a requeue for "behind")."""
+    from ai_factory.orchestrator import escalation
+
+    with session() as s:
+        run = TaskRun(
+            task_id=task_id,
+            project_id=project_id,
+            step="merge",
+            state=RunState.FAILED,
+            failure_kind=kind,
+            reason=reason,
+            ended_at=now(),
+        )
+        s.add(run)
+        s.commit()
+        run_id = run.id
+    assert run_id is not None
+    if transition(task_id, (TaskState.AWAITING_MERGE,), TaskState.FAILED, reason):
+        escalation.after_failure(task_id, run_id)
+
+
 async def handle(gate: Gate) -> None:
     from ai_factory.orchestrator import escalation, milestone, replan
-    from ai_factory.orchestrator.runner import merge_lock, merge_task
 
     approved = gate.state == GateState.APPROVED
     assert gate.id is not None
     try:
         if gate.kind == GateKind.TASK_MERGE and gate.task_id is not None:
             if approved:
-                try:
-                    async with merge_lock(gate.project_id):
-                        await asyncio.to_thread(merge_task, gate.task_id)
-                except gitops.GitError as e:
-                    transition(
-                        gate.task_id,
-                        (TaskState.AWAITING_MERGE,),
-                        TaskState.FAILED,
-                        f"merge failed: {e}",
-                    )
+                await merge_approved(gate.project_id, gate.task_id)
             else:
                 transition(
                     gate.task_id,
@@ -99,16 +140,7 @@ async def handle(gate: Gate) -> None:
                 )
         elif gate.kind in (GateKind.COVERAGE, GateKind.REVIEW) and gate.task_id is not None:
             if approved:  # merge anyway
-                try:
-                    async with merge_lock(gate.project_id):
-                        await asyncio.to_thread(merge_task, gate.task_id)
-                except gitops.GitError as e:
-                    transition(
-                        gate.task_id,
-                        (TaskState.AWAITING_MERGE,),
-                        TaskState.FAILED,
-                        f"merge failed: {e}",
-                    )
+                await merge_approved(gate.project_id, gate.task_id)
             elif gate.kind == GateKind.REVIEW:
                 send_back_to_builder(
                     gate.task_id, str(gate.payload.get("findings") or ""), gate.note
